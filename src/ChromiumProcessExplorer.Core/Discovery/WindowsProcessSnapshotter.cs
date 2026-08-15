@@ -11,6 +11,7 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
     private const uint ProcessQueryInformation = 0x0400;
     private const uint ProcessVmRead = 0x0010;
     private const uint ListModulesAll = 0x03;
+    private const int MaximumLoadedModuleCount = 4096;
     private const int SystemProcessInformation = 5;
     private const int ProcessCommandLineInformation = 60;
     private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
@@ -276,6 +277,11 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
 
             if (bytesNeeded <= bufferSize)
             {
+                if (bytesNeeded < 0)
+                {
+                    return ([], "The process returned an invalid loaded-module size.");
+                }
+
                 int moduleCount = bytesNeeded / nint.Size;
                 List<string> paths = new(moduleCount);
                 char[] pathBuffer = new char[32768];
@@ -297,8 +303,20 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
                     null);
             }
 
-            modules = new nint[checked(
-                (bytesNeeded + nint.Size - 1) / nint.Size)];
+            int requestedCount = checked((int)(
+                ((long)bytesNeeded + nint.Size - 1) / nint.Size));
+            if (requestedCount > MaximumLoadedModuleCount
+                || modules.Length >= MaximumLoadedModuleCount)
+            {
+                return (
+                    [],
+                    $"The process reported more than "
+                    + $"{MaximumLoadedModuleCount} loaded modules.");
+            }
+
+            modules = new nint[Math.Min(
+                MaximumLoadedModuleCount,
+                Math.Max(requestedCount, modules.Length * 2))];
         }
     }
 

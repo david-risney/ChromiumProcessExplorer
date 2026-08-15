@@ -5,9 +5,10 @@ namespace ChromiumProcessExplorer.Core.Discovery;
 /// </summary>
 public static class CefRuntimeAdapter
 {
-    private static readonly string[] CefRuntimeMarkers =
+    private const string CefRuntimeAnchor = "libcef.dll";
+
+    private static readonly string[] CefCorroboratingMarkers =
     [
-        "libcef.dll",
         "chrome_elf.dll",
         "icudtl.dat",
         "v8_context_snapshot.bin",
@@ -77,7 +78,7 @@ public static class CefRuntimeAdapter
                 && best.Value.Score.MatchedConfiguredSubprocess;
             if (!candidate.HasDirectCefEvidence
                 && !matchedConfiguredSubprocess
-                && best?.Score.Score < 50)
+                && (best?.Score.Score ?? 0) < 50)
             {
                 continue;
             }
@@ -143,16 +144,25 @@ public static class CefRuntimeAdapter
             AddWrapperFromText(item, wrappers);
         }
 
-        bool hasRuntimeModule = false;
+        bool hasCefAnchor = false;
         foreach (string module in process.LoadedModules)
         {
             string moduleName = Path.GetFileName(module);
-            if (CefRuntimeMarkers.Contains(moduleName, StringComparer.OrdinalIgnoreCase))
+            if (moduleName.Equals(CefRuntimeAnchor, StringComparison.OrdinalIgnoreCase))
             {
-                hasRuntimeModule = true;
+                hasCefAnchor = true;
                 evidence.Add(new CefEvidence(
                     "loaded-module",
                     $"Loaded CEF runtime module {moduleName}.",
+                    module));
+            }
+            else if (moduleName.Equals(
+                "chrome_elf.dll",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                evidence.Add(new CefEvidence(
+                    "loaded-module",
+                    $"Loaded Chromium module {moduleName}, corroborating CEF evidence.",
                     module));
             }
 
@@ -161,18 +171,26 @@ public static class CefRuntimeAdapter
         }
 
         string? executableDirectory = GetExecutableDirectory(process.ExecutablePath);
-        bool hasRuntimeFile = false;
         if (executableDirectory is not null)
         {
-            foreach (string marker in CefRuntimeMarkers)
+            string anchorPath = Path.Combine(executableDirectory, CefRuntimeAnchor);
+            if (File.Exists(anchorPath))
+            {
+                hasCefAnchor = true;
+                evidence.Add(new CefEvidence(
+                    "filesystem-marker",
+                    $"Found CEF runtime marker {CefRuntimeAnchor}.",
+                    anchorPath));
+            }
+
+            foreach (string marker in CefCorroboratingMarkers)
             {
                 string markerPath = Path.Combine(executableDirectory, marker);
                 if (File.Exists(markerPath))
                 {
-                    hasRuntimeFile = true;
                     evidence.Add(new CefEvidence(
                         "filesystem-marker",
-                        $"Found CEF runtime marker {marker}.",
+                        $"Found Chromium runtime marker {marker}, corroborating CEF evidence.",
                         markerPath));
                 }
             }
@@ -206,8 +224,7 @@ public static class CefRuntimeAdapter
                 StringComparison.OrdinalIgnoreCase)
             || executableName.Equals("cefsimple.exe", StringComparison.OrdinalIgnoreCase);
         bool hasCefTextEvidence = process.Evidence.Any(IsCefTextEvidence);
-        bool hasDirectCefEvidence = hasRuntimeModule
-            || hasRuntimeFile
+        bool hasDirectCefEvidence = hasCefAnchor
             || wrappers.Count > 0
             || isKnownSample
             || hasCefTextEvidence
@@ -257,7 +274,7 @@ public static class CefRuntimeAdapter
             warnings,
             evidence,
             hasDirectCefEvidence,
-            hasRuntimeModule || hasRuntimeFile);
+            hasCefAnchor);
     }
 
     private static CefProcessRole ClassifyRole(
@@ -302,13 +319,20 @@ public static class CefRuntimeAdapter
     {
         int score = 0;
         List<string> evidence = [];
-        bool validatedParent = browser.Process.ProcessId
-            == subprocess.Process.ParentProcessId
-            && IsCreatedBefore(browser.Process, subprocess.Process);
+        bool parentProcessIdMatches = browser.Process.ProcessId
+            == subprocess.Process.ParentProcessId;
+        bool validatedParent = parentProcessIdMatches
+            && HasValidatedParentGeneration(browser.Process, subprocess.Process);
         if (validatedParent)
         {
             score += 40;
             evidence.Add("Generation-safe parent process relationship.");
+        }
+        else if (parentProcessIdMatches)
+        {
+            score += 20;
+            evidence.Add(
+                "Parent process ID matches, but creation times do not validate the generation.");
         }
 
         bool matchedConfiguredSubprocess = PathsEqual(
@@ -374,34 +398,18 @@ public static class CefRuntimeAdapter
             association => association.BrowserProcessId))
         {
             Candidate browser = byProcessId[group.Key];
-            string executableName = Path.GetFileName(
-                browser.Process.ExecutablePath ?? browser.Process.ImageName);
-            CefDeploymentLayout layout;
-            if (executableName.Equals("bootstrap.exe", StringComparison.OrdinalIgnoreCase)
-                || executableName.Equals(
-                    "bootstrapc.exe",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                layout = CefDeploymentLayout.BootstrapOrDllHosted;
-            }
-            else if (!string.IsNullOrWhiteSpace(
-                browser.RuntimePaths.BrowserSubprocessPath))
-            {
-                layout = CefDeploymentLayout.SeparateSubprocess;
-            }
-            else
-            {
-                Candidate[] chromiumSubprocesses = group
-                    .Select(association => byProcessId[association.SubprocessProcessId])
-                    .Where(candidate => candidate.Role != CefProcessRole.Crashpad)
-                    .ToArray();
-                layout = chromiumSubprocesses.Length > 0
-                    && chromiumSubprocesses.All(subprocess => PathsEqual(
+            Candidate[] chromiumSubprocesses = group
+                .Select(association => byProcessId[association.SubprocessProcessId])
+                .Where(candidate => candidate.Role != CefProcessRole.Crashpad)
+                .ToArray();
+            CefDeploymentLayout layout = ClassifyConfiguredBrowserLayout(browser)
+                ?? (chromiumSubprocesses.Length == 0
+                    ? CefDeploymentLayout.Unknown
+                    : chromiumSubprocesses.All(subprocess => PathsEqual(
                         browser.Process.ExecutablePath,
                         subprocess.Process.ExecutablePath))
-                        ? CefDeploymentLayout.SameExecutable
-                        : CefDeploymentLayout.SeparateSubprocess;
-            }
+                            ? CefDeploymentLayout.SameExecutable
+                            : CefDeploymentLayout.SeparateSubprocess);
 
             layouts[browser.Process.ProcessId] = layout;
             foreach (CefProcessAssociation association in group)
@@ -414,25 +422,32 @@ public static class CefRuntimeAdapter
             candidate => candidate.Role == CefProcessRole.Browser
                 && !layouts.ContainsKey(candidate.Process.ProcessId)))
         {
-            string executableName = Path.GetFileName(
-                browser.Process.ExecutablePath ?? browser.Process.ImageName);
-            if (executableName.Equals("bootstrap.exe", StringComparison.OrdinalIgnoreCase)
-                || executableName.Equals(
-                    "bootstrapc.exe",
-                    StringComparison.OrdinalIgnoreCase))
+            if (ClassifyConfiguredBrowserLayout(browser) is
+                CefDeploymentLayout layout)
             {
-                layouts[browser.Process.ProcessId] =
-                    CefDeploymentLayout.BootstrapOrDllHosted;
-            }
-            else if (!string.IsNullOrWhiteSpace(
-                browser.RuntimePaths.BrowserSubprocessPath))
-            {
-                layouts[browser.Process.ProcessId] =
-                    CefDeploymentLayout.SeparateSubprocess;
+                layouts[browser.Process.ProcessId] = layout;
             }
         }
 
         return layouts;
+    }
+
+    private static CefDeploymentLayout? ClassifyConfiguredBrowserLayout(
+        Candidate browser)
+    {
+        string executableName = Path.GetFileName(
+            browser.Process.ExecutablePath ?? browser.Process.ImageName);
+        if (executableName.Equals("bootstrap.exe", StringComparison.OrdinalIgnoreCase)
+            || executableName.Equals(
+                "bootstrapc.exe",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return CefDeploymentLayout.BootstrapOrDllHosted;
+        }
+
+        return string.IsNullOrWhiteSpace(browser.RuntimePaths.BrowserSubprocessPath)
+            ? null
+            : CefDeploymentLayout.SeparateSubprocess;
     }
 
     private static void AddWrapperFromMarker(
@@ -475,13 +490,13 @@ public static class CefRuntimeAdapter
             || evidence.Contains("CEF4Delphi", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsCreatedBefore(
+    private static bool HasValidatedParentGeneration(
         ProcessSnapshotEntry possibleParent,
         ProcessSnapshotEntry child)
     {
-        return possibleParent.CreationTime is null
-            || child.CreationTime is null
-            || possibleParent.CreationTime <= child.CreationTime;
+        return possibleParent.CreationTime is not null
+            && child.CreationTime is not null
+            && possibleParent.CreationTime <= child.CreationTime;
     }
 
     private static bool HasStartupProximity(

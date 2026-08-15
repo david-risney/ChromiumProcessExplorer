@@ -21,7 +21,8 @@ The solution targets .NET 9 on Windows and contains:
   consumed by the CLI, a future GUI, or other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
-  parsing, Mojo pipe recognition, and process-tree generation.
+  parsing, Mojo pipe recognition, process-tree generation, and CEF runtime
+  analysis.
 
 Discovery takes one process snapshot, enriches process metadata with bounded
 parallelism, and validates parent relationships with process creation times

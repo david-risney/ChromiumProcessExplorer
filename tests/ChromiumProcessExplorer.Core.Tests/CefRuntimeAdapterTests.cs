@@ -323,6 +323,133 @@ public sealed class CefRuntimeAdapterTests : IDisposable
                 process.Layout));
     }
 
+    [Fact]
+    public void AnalyzeLeavesCrashpadOnlyLayoutUnknown()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        ProcessSnapshotEntry browser = CreateProcess(
+            65,
+            1,
+            start,
+            @"C:\Apps\Sample\sample.exe",
+            "\"C:\\Apps\\Sample\\sample.exe\"") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+        ProcessSnapshotEntry crashpad = CreateProcess(
+            66,
+            65,
+            start.AddSeconds(1),
+            @"C:\Apps\Sample\crashpad_handler.exe",
+            "\"C:\\Apps\\Sample\\crashpad_handler.exe\" "
+                + "--type=crashpad-handler",
+            "crashpad-handler") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+
+        CefRuntimeAnalysis result = CefRuntimeAdapter.Analyze([browser, crashpad]);
+
+        Assert.All(
+            result.Processes,
+            process => Assert.Equal(
+                CefDeploymentLayout.Unknown,
+                process.Layout));
+    }
+
+    [Fact]
+    public void AnalyzeOmitsUnassociatedProcessWithoutCefEvidence()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        ProcessSnapshotEntry renderer = CreateProcess(
+            70,
+            1,
+            DateTimeOffset.UtcNow,
+            @"C:\Other\chrome.exe",
+            "\"C:\\Other\\chrome.exe\" --type=renderer",
+            "renderer",
+            evidence: ["--type command-line switch"]);
+
+        CefRuntimeAnalysis result = CefRuntimeAdapter.Analyze([renderer]);
+
+        Assert.Empty(result.Processes);
+        Assert.Empty(result.Associations);
+    }
+
+    [Fact]
+    public void AnalyzeDoesNotTreatGenericChromiumFilesAsCefAnchor()
+    {
+        string applicationDirectory = Path.Combine(_root, "generic-chromium");
+        Directory.CreateDirectory(applicationDirectory);
+        string executable = Path.Combine(applicationDirectory, "generic.exe");
+        File.WriteAllText(executable, string.Empty);
+        File.WriteAllText(
+            Path.Combine(applicationDirectory, "resources.pak"),
+            string.Empty);
+        File.WriteAllText(
+            Path.Combine(applicationDirectory, "icudtl.dat"),
+            string.Empty);
+        ProcessSnapshotEntry process = CreateProcess(
+            80,
+            1,
+            DateTimeOffset.UtcNow,
+            executable,
+            string.Empty);
+
+        CefRuntimeAnalysis result = CefRuntimeAdapter.Analyze([process]);
+
+        Assert.Empty(result.Processes);
+    }
+
+    [Fact]
+    public void AnalyzeDoesNotAuthorizeParentWithoutCreationTimes()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string executable = @"C:\Apps\Sample\sample.exe";
+        ProcessSnapshotEntry browser = CreateProcess(
+            90,
+            1,
+            null,
+            executable,
+            $"\"{executable}\"") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+        ProcessSnapshotEntry renderer = CreateProcess(
+            91,
+            90,
+            null,
+            executable,
+            $"\"{executable}\" --type=renderer",
+            "renderer") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+
+        CefProcessAssociation association = Assert.Single(
+            CefRuntimeAdapter.Analyze([browser, renderer]).Associations);
+
+        Assert.False(association.IsAuthoritative);
+        Assert.DoesNotContain(
+            association.Evidence,
+            evidence => evidence.Contains(
+                "Generation-safe",
+                StringComparison.Ordinal));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
@@ -334,7 +461,7 @@ public sealed class CefRuntimeAdapterTests : IDisposable
     private static ProcessSnapshotEntry CreateProcess(
         int processId,
         int parentProcessId,
-        DateTimeOffset creationTime,
+        DateTimeOffset? creationTime,
         string executablePath,
         string commandLine,
         string? processType = null,
