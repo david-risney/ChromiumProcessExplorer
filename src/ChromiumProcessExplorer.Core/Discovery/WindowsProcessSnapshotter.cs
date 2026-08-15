@@ -8,6 +8,9 @@ namespace ChromiumProcessExplorer.Core.Discovery;
 public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
 {
     private const uint ProcessQueryLimitedInformation = 0x1000;
+    private const uint ProcessQueryInformation = 0x0400;
+    private const uint ProcessVmRead = 0x0010;
+    private const uint ListModulesAll = 0x03;
     private const int SystemProcessInformation = 5;
     private const int ProcessCommandLineInformation = 60;
     private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
@@ -221,6 +224,8 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
             processType = "browser";
         }
 
+        (IReadOnlyList<string> loadedModules, string? moduleInspectionError) =
+            QueryLoadedModules(basic.ProcessId);
         return new ProcessSnapshotEntry(
             basic.ProcessId,
             basic.ParentProcessId,
@@ -232,7 +237,69 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
             userDataDirectory,
             isLikelyChromium,
             evidence,
-            metadataError);
+            metadataError)
+        {
+            LoadedModules = loadedModules,
+            ModuleInspectionError = moduleInspectionError,
+        };
+    }
+
+    private static (IReadOnlyList<string> Modules, string? Error)
+        QueryLoadedModules(int processId)
+    {
+        using SafeFileHandle process = NativeMethods.OpenProcess(
+            ProcessQueryInformation | ProcessVmRead,
+            false,
+            processId);
+        if (process.IsInvalid)
+        {
+            return (
+                [],
+                new Win32Exception(Marshal.GetLastWin32Error()).Message);
+        }
+
+        nint[] modules = new nint[64];
+        while (true)
+        {
+            int bufferSize = checked(modules.Length * nint.Size);
+            if (!NativeMethods.K32EnumProcessModulesEx(
+                process,
+                modules,
+                bufferSize,
+                out int bytesNeeded,
+                ListModulesAll))
+            {
+                return (
+                    [],
+                    new Win32Exception(Marshal.GetLastWin32Error()).Message);
+            }
+
+            if (bytesNeeded <= bufferSize)
+            {
+                int moduleCount = bytesNeeded / nint.Size;
+                List<string> paths = new(moduleCount);
+                char[] pathBuffer = new char[32768];
+                for (int index = 0; index < moduleCount; index++)
+                {
+                    uint length = NativeMethods.K32GetModuleFileNameEx(
+                        process,
+                        modules[index],
+                        pathBuffer,
+                        (uint)pathBuffer.Length);
+                    if (length > 0)
+                    {
+                        paths.Add(new string(pathBuffer, 0, checked((int)length)));
+                    }
+                }
+
+                return (
+                    paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    null);
+            }
+
+            modules = new nint[checked(
+                (bytesNeeded + nint.Size - 1) / nint.Size)];
+        }
     }
 
     private static DateTimeOffset? QueryCreationTime(SafeFileHandle process)
@@ -356,6 +423,26 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
             uint flags,
             [Out] char[] executableName,
             ref uint size);
+
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool K32EnumProcessModulesEx(
+            SafeFileHandle process,
+            [Out] nint[] modules,
+            int bufferSize,
+            out int bytesNeeded,
+            uint filterFlag);
+
+        [LibraryImport(
+            "kernel32.dll",
+            EntryPoint = "K32GetModuleFileNameExW",
+            SetLastError = true,
+            StringMarshalling = StringMarshalling.Utf16)]
+        internal static partial uint K32GetModuleFileNameEx(
+            SafeFileHandle process,
+            nint module,
+            [Out] char[] fileName,
+            uint size);
 
         [LibraryImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
