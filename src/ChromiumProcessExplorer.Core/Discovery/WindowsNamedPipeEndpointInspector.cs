@@ -282,10 +282,7 @@ internal static partial class WindowsNamedPipeEndpointInspector
         {
             return processId is int value
                 && processById.TryGetValue(value, out ProcessSnapshotEntry? process)
-                && !string.Equals(
-                    process.MetadataError,
-                    "The process ID was reused after the system snapshot was captured.",
-                    StringComparison.Ordinal)
+                && !process.IsProcessIdReused
                     ? process.ImageName
                     : null;
         }

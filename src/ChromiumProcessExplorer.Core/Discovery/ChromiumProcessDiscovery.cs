@@ -62,16 +62,21 @@ public sealed class ChromiumProcessDiscovery
 
         IReadOnlyList<ProcessSnapshotEntry> processes = await processTask;
         MojoPipeEnumerationResult pipeResult = await pipeTask;
-        ProcessTree tree = ProcessTreeBuilder.Build(processes);
         MojoPipeInspectionResult inspection = await InspectMojoPipesAsync(
             pipeResult,
             processes,
             workerOptions,
             cancellationToken);
+        ProcessGraph graph = ProcessGraphBuilder.Build(
+            processes,
+            inspection,
+            capturedAt);
+        ProcessTree tree = graph.CreateProcessTree();
 
         return new ChromiumDiscoveryResult(
             capturedAt,
             processes,
+            graph,
             tree,
             inspection,
             inspection.Issues);
@@ -181,6 +186,7 @@ public sealed class ChromiumProcessDiscovery
 public sealed record ChromiumDiscoveryResult(
     DateTimeOffset CapturedAt,
     IReadOnlyList<ProcessSnapshotEntry> Processes,
+    ProcessGraph ProcessGraph,
     ProcessTree ProcessTree,
     MojoPipeInspectionResult MojoPipeInspection,
     IReadOnlyList<DiscoveryIssue> Issues);

@@ -16,9 +16,9 @@ installation details, and executable metadata into one place.
 The solution targets .NET 9 on Windows and contains:
 
 - **ChromiumProcessExplorer.Core** - reusable process discovery, Chromium
-  command-line parsing, generation-safe process-tree construction, and Mojo
-  pipe and installation enumeration. The public APIs can be consumed by the
-  CLI, a future GUI, or other .NET applications.
+  command-line parsing, typed process-graph and generation-safe process-tree
+  construction, and Mojo pipe and installation enumeration. The public APIs can
+  be consumed by the CLI, a future GUI, or other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
   parsing, Mojo pipe recognition, and process-tree generation.
@@ -28,9 +28,11 @@ parallelism, and validates parent relationships with process creation times
 when available. Both `process-tree` and `mojo-pipes` consume the same
 endpoint-enriched Mojo inspection. Resolved server, client, and handle-owner
 PIDs are used as process evidence; the pipe-name PID is only a fallback when no
-endpoint can be resolved. The default process tree contains only processes with
-Chromium or Mojo evidence; unrelated ancestors are omitted. Use `--all` for the
-complete Windows process snapshot.
+endpoint can be resolved. The typed graph retains distinct OS-parent and Mojo
+edges, their raw evidence, source, confidence, and observation time. The
+default process tree and graph contain only processes with Chromium or Mojo
+evidence; unrelated ancestors are omitted. Use `--all` for the complete Windows
+process snapshot.
 
 ### Build and test
 
@@ -99,6 +101,11 @@ using ChromiumProcessExplorer.Core.Discovery;
 
 ChromiumProcessDiscovery discovery = new();
 ChromiumDiscoveryResult result = await discovery.DiscoverAsync();
+
+foreach (ProcessGraphEdge edge in result.ProcessGraph.Edges)
+{
+    Console.WriteLine($"{edge.Type}: {edge.Source} -> {edge.Target}");
+}
 
 foreach (ProcessTreeNode root in result.ProcessTree.Roots)
 {

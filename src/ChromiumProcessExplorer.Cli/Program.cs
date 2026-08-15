@@ -350,6 +350,7 @@ internal static class CliApplication
     private static void WriteTree(ChromiumDiscoveryResult result, CliOptions options)
     {
         ProcessTree tree = result.ProcessTree;
+        ProcessGraph graph = result.ProcessGraph;
         IReadOnlySet<int> mojoProcessIds =
             result.MojoPipeInspection.GetRelatedProcessIds();
         if (!options.AllProcesses)
@@ -360,6 +361,7 @@ internal static class CliApplication
                 .Concat(mojoProcessIds)
                 .ToHashSet();
             tree = tree.CreateFilteredView(seeds);
+            graph = graph.CreateFilteredView(seeds);
         }
 
         if (options.Json)
@@ -369,6 +371,7 @@ internal static class CliApplication
                 {
                     result.CapturedAt,
                     Roots = tree.Roots.Select(ToSerializableNode),
+                    ProcessGraph = graph,
                     result.MojoPipeInspection,
                     result.Issues,
                 },
