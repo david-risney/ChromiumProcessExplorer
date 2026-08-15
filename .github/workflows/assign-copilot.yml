@@ -3,27 +3,55 @@ name: Assign Copilot to ready issues
 on:
   issues:
     types: [labeled]
+  workflow_dispatch:
 
 permissions: {}
 
+concurrency:
+  group: copilot-ready-issue-assignment
+  cancel-in-progress: false
+
 jobs:
   assign-copilot:
-    if: github.event.label.name == 'copilot-ready'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'copilot-ready'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Assign Copilot
+      - name: Assign next ready issue
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ secrets.COPILOT_ASSIGNMENT_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          set -euo pipefail
+
           if [[ -z "$GH_TOKEN" ]]; then
             echo "::error::COPILOT_ASSIGNMENT_TOKEN is not configured"
             exit 1
           fi
+
+          mapfile -t ready_issue_numbers < <(
+            gh api --paginate \
+              "/repos/${REPOSITORY}/issues?state=open&labels=copilot-ready&per_page=100" \
+              --jq '
+                .[]
+                | select(has("pull_request") | not)
+                | select(all(.assignees[]?; .login != "copilot-swe-agent[bot]"))
+                | .number
+              '
+          )
+
+          if (( ${#ready_issue_numbers[@]} == 0 )); then
+            echo "No unassigned open issues have the copilot-ready label"
+            exit 0
+          fi
+
+          issue_number="$(
+            printf '%s\n' "${ready_issue_numbers[@]}" |
+              sort -n |
+              head -n 1
+          )"
 
           jq -n \
             --arg target_repo "$REPOSITORY" \
@@ -39,5 +67,7 @@ jobs:
               --method POST \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "/repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/assignees" \
+              "/repos/${REPOSITORY}/issues/${issue_number}/assignees" \
               --input -
+
+          echo "Assigned Copilot to issue #${issue_number}"
