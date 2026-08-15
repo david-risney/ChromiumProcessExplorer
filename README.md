@@ -204,3 +204,18 @@ Open design investigations include:
 - Administrative elevation for Copilot skill execution
 - Whether an elevated MCP server is the appropriate Copilot integration model
 - The exact compatibility scope with WebView2Utilities
+
+## Research and design notes
+
+Detailed investigations are available under `docs\`, including:
+
+- [WebView2 process association](docs/webview2-process-association.md)
+- [Electron on Windows](docs/electron-investigation.md)
+- [CEF on Windows](docs/cef-investigation.md)
+- [Other Chromium-based platforms](docs/other-chromium-platforms.md)
+- [Windows pipe-handle query hangs](docs/windows-pipe-handle-query-hangs.md)
+- [Renderer PID to origin mapping](docs/renderer-origin-investigation.md)
+- [CDP transports and Windows accessibility](docs/cdp-transports-and-accessibility.md)
+- [Windows launch-time command-line instrumentation](docs/windows-command-line-instrumentation.md)
+- [Similar projects, reusable ideas, and licensing](docs/similar-projects-and-licensing.md)
+- [Admin-capable Copilot integration](docs/admin-copilot-integration.md)

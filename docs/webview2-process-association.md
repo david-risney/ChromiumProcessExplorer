@@ -152,6 +152,19 @@ Every inferred edge should include its evidence, confidence, and timestamp.
 This prevents a WebView2 HWND association from being confused with an OS parent
 relationship and allows conflicting evidence to be displayed honestly.
 
+`EmbeddedHost` should describe a **logical role or typed relationship**, not a
+new kind of Windows process. It means that a native application embeds or owns
+a Chromium browser/runtime instance, such as a WebView2 host connected to an
+`msedgewebview2.exe` browser process. The host does not need to be the browser
+process's OS parent.
+
+One browser process can have multiple embedded hosts, and one host can own
+multiple browser/runtime instances. Represent those as multiple `embedded-by`
+or Mojo evidence edges pointing to shared process nodes. Do not duplicate the
+browser subtree or select one host as the authoritative parent. The strict
+process tree remains useful for launch ancestry; the graph adds the logical
+relationships that the tree cannot express.
+
 ## Improvements over the reviewed implementation
 
 1. **Avoid a null-parent race.** `HostAppList` reads `parentProcess.Id` while

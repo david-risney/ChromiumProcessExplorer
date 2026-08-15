@@ -108,28 +108,28 @@ Qt WebEngine has a distinct helper executable, a stable resource set, stable env
 
 ### Underlying engine
 NW.js is an app runtime based on **Chromium and Node.js**, intended for packaged desktop apps. Current official downloads (as of the repo README captured here) show Windows builds and a release line based on **Chromium 151**.  
-Sources: [NW.js README](https://github.com/nwjs/nw.js/blob/master/README.md), [Getting Started](https://github.com/nwjs/nw.js/blob/master/docs/For%20Users/Getting%20Started.md).
+Sources: [NW.js README](https://github.com/nwjs/nw.js/blob/main/README.md), [Getting Started](https://github.com/nwjs/nw.js/blob/main/docs/For%20Users/Getting%20Started.md).
 
 ### Process model and host association
 NW.js is clearly Chromium-derived and documents a **single-process override**: `--disable-crash-handler=true` only matters when combined with `--single-process`, and the docs note that this results in **only one NW process**. That implies the normal model is multi-process. In production, the host is `nw.exe` or a renamed copy, while Chromium subprocess roles are still expected underneath.  
-Source: [NW.js command-line options](https://github.com/nwjs/nw.js/blob/master/docs/References/Command%20Line%20Options.md).
+Source: [NW.js command-line options](https://github.com/nwjs/nw.js/blob/main/docs/References/Command%20Line%20Options.md).
 
 ### Verified fingerprints
 - App manifest: required `package.json` with at least `name` and `main`.  
 - Packaging forms: plain files next to `nw.exe`, folder named `package.nw`, zip renamed `package.nw`, or `package.nw` appended directly to `nw.exe` to create `app.exe`.  
 - App-specific Chromium flags via manifest `chromium-args`; runtime pre-args via `NW_PRE_ARGS`.  
 - Windows launcher name is often still `nw.exe`, but packaging guidance explicitly supports hiding NW.js inside a renamed executable.  
-Sources: [Getting Started](https://github.com/nwjs/nw.js/blob/master/docs/For%20Users/Getting%20Started.md), [Manifest Format](https://github.com/nwjs/nw.js/blob/master/docs/References/Manifest%20Format.md), [Package and Distribute](https://github.com/nwjs/nw.js/blob/master/docs/For%20Users/Package%20and%20Distribute.md).
+Sources: [Getting Started](https://github.com/nwjs/nw.js/blob/main/docs/For%20Users/Getting%20Started.md), [Manifest Format](https://github.com/nwjs/nw.js/blob/main/docs/References/Manifest%20Format.md), [Package and Distribute](https://github.com/nwjs/nw.js/blob/main/docs/For%20Users/Package%20and%20Distribute.md).
 
 ### Runtime/user-data paths
 `--user-data-dir` is supported, and the default Windows data directory is `%LOCALAPPDATA%/<name-in-manifest>/`. NW.js documents that this directory contains **stored data, caches, and crash dumps**.  
-Source: [NW.js command-line options](https://github.com/nwjs/nw.js/blob/master/docs/References/Command%20Line%20Options.md).
+Source: [NW.js command-line options](https://github.com/nwjs/nw.js/blob/main/docs/References/Command%20Line%20Options.md).
 
 ### Remote debugging / logging / crash reporting
 - DevTools are available in **SDK flavor only** and can be opened with `F12` or `win.showDevTools()`.  
 - Remote debugging uses `--remote-debugging-port=<port>` and serves DevTools at `http://localhost:<port>/`.  
 - Crash upload can be configured through manifest field `crash_report_url`; the manifest docs say the request includes the app `name`, `version`, the minidump, and crashing-process command-line switches.  
-Sources: [Debugging with DevTools](https://github.com/nwjs/nw.js/blob/master/docs/For%20Users/Debugging%20with%20DevTools.md), [Manifest Format](https://github.com/nwjs/nw.js/blob/master/docs/References/Manifest%20Format.md).
+Sources: [Debugging with DevTools](https://github.com/nwjs/nw.js/blob/main/docs/For%20Users/Debugging%20with%20DevTools.md), [Manifest Format](https://github.com/nwjs/nw.js/blob/main/docs/References/Manifest%20Format.md).
 
 ### Why it deserves first-class support
 NW.js is not “just generic Chromium”: the required manifest, `package.nw` model, default `%LOCALAPPDATA%\<name>` profile path, and documented packaging/stub patterns make it distinguishable and valuable to detect directly.
@@ -480,6 +480,41 @@ For install discovery:
    - Ultralight app
    - ensure they are **not** labeled Chromium
 
+## Real-world validation targets
+
+The following applications are useful diagnostic targets, but commercial
+products can change frameworks between releases. Treat the named product as a
+test candidate and verify the installed version using local process, module,
+and filesystem evidence.
+
+| Platform | Candidate | Useful fingerprints or setup |
+| --- | --- | --- |
+| CEF | Steam | `steamwebhelper.exe`, `libcef.dll`, CEF resources; verify the current client installation |
+| CEF | OBS Studio Browser Source | Add a Browser Source and inspect the `obs-browser` helper/runtime files |
+| CEF | `cefclient` / `cefsimple` | Controlled upstream baselines for process roles, switches, DevTools, and packaging |
+| Electron | Visual Studio Code, Slack, Discord, Signal, GitHub Desktop, Postman | Verify package resources, Electron metadata, main process, and Chromium children |
+| NW.js | RPG Maker MV/MZ games, Construct desktop exports, WebTorrent Desktop | Look for `nw.dll`, `package.json`, `package.nw`, and the NW.js profile layout |
+| Qt WebEngine | Qt Simple Browser or another app shipping `QtWebEngineProcess.exe` | Controlled Qt baseline with helper/resource/profile evidence |
+| CEF through an engine | Unreal Engine Web Browser widget samples | Feature-dependent; verify the shipped CEF runtime rather than assuming every Unreal product uses it |
+
+Steam and OBS are particularly useful because they exercise realistic CEF
+trees. An RPG Maker MV/MZ application is an accessible packaged NW.js example.
+Qt's Simple Browser is preferable to guessing which version of a commercial Qt
+application still uses Qt WebEngine.
+
+Claims about products such as Spotify, Adobe, Autodesk, or other commercial
+clients should remain version-dependent until the local installation shows
+corroborating fingerprints.
+
+Additional references:
+
+- OBS Browser Source: https://github.com/obsproject/obs-browser
+- Electron application directory: https://www.electronjs.org/apps
+- CEF sample applications:
+  https://github.com/chromiumembedded/cef/tree/master/tests
+- Qt WebEngine Simple Browser:
+  https://doc.qt.io/qt-6/qtwebengine-webenginewidgets-simplebrowser-example.html
+
 ---
 
 ## Bottom line
@@ -531,12 +566,12 @@ That set maximizes Windows diagnostic value while minimizing false claims.
 - cefpython initialization defaults: https://github.com/cztomczak/cefpython/blob/master/src/cefpython.pyx
 
 ### NW.js
-- NW.js README: https://github.com/nwjs/nw.js/blob/master/README.md
-- Getting started: https://github.com/nwjs/nw.js/blob/master/docs/For%20Users/Getting%20Started.md
-- Package and distribute: https://github.com/nwjs/nw.js/blob/master/docs/For%20Users/Package%20and%20Distribute.md
-- Manifest format: https://github.com/nwjs/nw.js/blob/master/docs/References/Manifest%20Format.md
-- Command-line options: https://github.com/nwjs/nw.js/blob/master/docs/References/Command%20Line%20Options.md
-- Debugging with DevTools: https://github.com/nwjs/nw.js/blob/master/docs/For%20Users/Debugging%20with%20DevTools.md
+- NW.js README: https://github.com/nwjs/nw.js/blob/main/README.md
+- Getting started: https://github.com/nwjs/nw.js/blob/main/docs/For%20Users/Getting%20Started.md
+- Package and distribute: https://github.com/nwjs/nw.js/blob/main/docs/For%20Users/Package%20and%20Distribute.md
+- Manifest format: https://github.com/nwjs/nw.js/blob/main/docs/References/Manifest%20Format.md
+- Command-line options: https://github.com/nwjs/nw.js/blob/main/docs/References/Command%20Line%20Options.md
+- Debugging with DevTools: https://github.com/nwjs/nw.js/blob/main/docs/For%20Users/Debugging%20with%20DevTools.md
 
 ### WebView2 integrations
 - WPF: https://learn.microsoft.com/en-us/microsoft-edge/webview2/get-started/wpf

@@ -1,5 +1,8 @@
 # Windows pipe-handle query hangs
 
+For a broader comparison of reusable implementations and their licenses, see
+[Similar projects, reusable ideas, and licensing](similar-projects-and-licensing.md).
+
 **Researched:** 2026-08-14
 
 The commonly reported hang is not system handle enumeration itself. It is
