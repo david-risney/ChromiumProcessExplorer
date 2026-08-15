@@ -219,4 +219,4 @@ Detailed investigations are available under `docs\`, including:
 - [Windows launch-time command-line instrumentation](docs/windows-command-line-instrumentation.md)
 - [Similar projects, reusable ideas, and licensing](docs/similar-projects-and-licensing.md)
 - [Admin-capable Copilot integration](docs/admin-copilot-integration.md)
-- [Copilot issue automation](docs/copilot-issue-automation.md)
+- [Copilot automation](docs/copilot-issue-automation.md)
