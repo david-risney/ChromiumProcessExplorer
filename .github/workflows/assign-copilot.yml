@@ -37,7 +37,12 @@ jobs:
             --jq '
               .[]
               | select(has("pull_request") | not)
-              | select(all(.assignees[]?; .login != "copilot-swe-agent[bot]"))
+              | select(all(
+                  .assignees[]?;
+                  .login != "copilot-swe-agent[bot]"
+                  and .login != "copilot-swe-agent"
+                  and .login != "copilot"
+                ))
               | .number
             ' > "$ready_issue_numbers"
 

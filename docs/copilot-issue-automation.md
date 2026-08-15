@@ -10,7 +10,8 @@ Copilot. It uses the repository's default branch as the base for the work.
 
 ## Required manual setup
 
-Perform these steps after the workflow has been merged into the default branch:
+Complete these steps before the first assignment run. The workflow must be
+merged into the default branch before it can be run manually.
 
 1. Confirm that the token owner has a paid Copilot plan with cloud agent access.
    For an organization-owned repository, an organization owner must also enable
@@ -112,7 +113,7 @@ operating only after the workflow is merged. GitHub may delay scheduled runs
 during periods of high Actions load.
 
 For projects spanning multiple repositories, add this workflow and its secret
-to each repository whose issues should be eligible.
+to each repository whose pull requests should be eligible.
 
 See GitHub's documentation for
 [using Copilot cloud agent via the API](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-via-the-api)
