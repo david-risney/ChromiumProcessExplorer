@@ -31,27 +31,23 @@ jobs:
             exit 1
           fi
 
-          mapfile -t ready_issue_numbers < <(
-            gh api --paginate \
-              "/repos/${REPOSITORY}/issues?state=open&labels=copilot-ready&per_page=100" \
-              --jq '
-                .[]
-                | select(has("pull_request") | not)
-                | select(all(.assignees[]?; .login != "copilot-swe-agent[bot]"))
-                | .number
-              '
-          )
+          ready_issue_numbers="${RUNNER_TEMP}/copilot-ready-issue-numbers.txt"
+          gh api --paginate \
+            "/repos/${REPOSITORY}/issues?state=open&labels=copilot-ready&per_page=100" \
+            --jq '
+              .[]
+              | select(has("pull_request") | not)
+              | select(all(.assignees[]?; .login != "copilot-swe-agent[bot]"))
+              | .number
+            ' > "$ready_issue_numbers"
 
-          if (( ${#ready_issue_numbers[@]} == 0 )); then
+          if [[ ! -s "$ready_issue_numbers" ]]; then
             echo "No unassigned open issues have the copilot-ready label"
             exit 0
           fi
 
-          issue_number="$(
-            printf '%s\n' "${ready_issue_numbers[@]}" |
-              sort -n |
-              head -n 1
-          )"
+          sort -n -o "$ready_issue_numbers" "$ready_issue_numbers"
+          read -r issue_number < "$ready_issue_numbers"
 
           jq -n \
             --arg target_repo "$REPOSITORY" \
