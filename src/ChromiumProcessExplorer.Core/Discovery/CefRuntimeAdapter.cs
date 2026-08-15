@@ -6,6 +6,10 @@ namespace ChromiumProcessExplorer.Core.Discovery;
 public static class CefRuntimeAdapter
 {
     private const string CefRuntimeAnchor = "libcef.dll";
+    private const int MinimumCandidateAssociationScore = 50;
+    private const int MinimumReportedAssociationScore = 35;
+    private const int HighConfidenceScore = 75;
+    private const int MediumConfidenceScore = 50;
 
     private static readonly string[] CefCorroboratingMarkers =
     [
@@ -78,13 +82,14 @@ public static class CefRuntimeAdapter
                 && best.Value.Score.MatchedConfiguredSubprocess;
             if (!candidate.HasDirectCefEvidence
                 && !matchedConfiguredSubprocess
-                && (best?.Score.Score ?? 0) < 50)
+                && (best?.Score.Score ?? 0) < MinimumCandidateAssociationScore)
             {
                 continue;
             }
 
             includedProcessIds.Add(candidate.Process.ProcessId);
-            if (best is null || best.Value.Score.Score < 35)
+            if (best is null
+                || best.Value.Score.Score < MinimumReportedAssociationScore)
             {
                 continue;
             }
@@ -94,8 +99,8 @@ public static class CefRuntimeAdapter
             includedProcessIds.Add(browser.Process.ProcessId);
             CefAssociationConfidence confidence = score.Score switch
             {
-                >= 75 => CefAssociationConfidence.High,
-                >= 50 => CefAssociationConfidence.Medium,
+                >= HighConfidenceScore => CefAssociationConfidence.High,
+                >= MediumConfidenceScore => CefAssociationConfidence.Medium,
                 _ => CefAssociationConfidence.Low,
             };
             bool authoritative = confidence == CefAssociationConfidence.High
@@ -469,8 +474,7 @@ public static class CefRuntimeAdapter
             wrappers.Add("CefSharp");
         }
 
-        if (text.Contains("JCEF", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("jcef.dll", StringComparison.OrdinalIgnoreCase))
+        if (text.Contains("JCEF", StringComparison.OrdinalIgnoreCase))
         {
             wrappers.Add("JCEF");
         }
