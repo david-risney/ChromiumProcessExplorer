@@ -1,0 +1,43 @@
+name: Assign Copilot to ready issues
+
+on:
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  assign-copilot:
+    if: github.event.label.name == 'copilot-ready'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Assign Copilot
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.COPILOT_ASSIGNMENT_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::COPILOT_ASSIGNMENT_TOKEN is not configured"
+            exit 1
+          fi
+
+          jq -n \
+            --arg target_repo "$REPOSITORY" \
+            --arg base_branch "$DEFAULT_BRANCH" \
+            '{
+              assignees: ["copilot-swe-agent[bot]"],
+              agent_assignment: {
+                target_repo: $target_repo,
+                base_branch: $base_branch
+              }
+            }' |
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/assignees" \
+              --input -
