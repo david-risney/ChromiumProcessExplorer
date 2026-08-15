@@ -120,6 +120,16 @@ public sealed class ProcessGraph
                 new ProcessIdentity(process.ProcessId, process.CreationTime),
                 process))
             .ToArray();
+        IGrouping<int, ProcessGraphNode>? duplicateProcessId = nodes
+            .GroupBy(node => node.Process.ProcessId)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateProcessId is not null)
+        {
+            throw new ArgumentException(
+                $"Process ID {duplicateProcessId.Key} occurs more than once in the snapshot.",
+                nameof(processes));
+        }
+
         Dictionary<ProcessIdentity, ProcessGraphNode> nodesByIdentity =
             nodes.ToDictionary(node => node.Identity);
         Dictionary<int, ProcessGraphNode> nodesByProcessId =
@@ -198,8 +208,8 @@ public sealed class ProcessGraph
     }
 
     private static Dictionary<ProcessIdentity, IReadOnlyList<ProcessGraphEdge>> CreateEdgeIndex(
-            IEnumerable<ProcessGraphEdge> edges,
-            Func<ProcessGraphEdge, ProcessIdentity> identitySelector)
+        IEnumerable<ProcessGraphEdge> edges,
+        Func<ProcessGraphEdge, ProcessIdentity> identitySelector)
     {
         return edges
             .GroupBy(identitySelector)
