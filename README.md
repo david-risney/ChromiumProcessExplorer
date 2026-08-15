@@ -16,9 +16,9 @@ installation details, and executable metadata into one place.
 The solution targets .NET 9 on Windows and contains:
 
 - **ChromiumProcessExplorer.Core** - reusable process discovery, Chromium
-  command-line parsing, generation-safe process-tree construction, and Mojo
-  pipe and installation enumeration. The public APIs can be consumed by the
-  CLI, a future GUI, or other .NET applications.
+  command-line parsing, generation-safe process-tree construction, CEF runtime
+  analysis, and Mojo pipe and installation enumeration. The public APIs can be
+  consumed by the CLI, a future GUI, or other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
   parsing, Mojo pipe recognition, and process-tree generation.
@@ -194,9 +194,11 @@ before sharing it.
 ## Project status
 
 The process, Mojo endpoint, and initial installation discovery foundations are
-implemented. Loaded-module and HWND evidence, deeper platform-specific
-WebView2, Electron, and CEF adapters, logging diagnostics, packaging, and the
-GUI remain planned work.
+implemented. CEF process roles, deployment layouts, explicit runtime paths,
+wrapper markers, risky switches, loaded-module evidence, and confidence-scored
+browser/subprocess associations are also exposed. HWND evidence, deeper
+platform-specific WebView2 and Electron adapters, logging diagnostics,
+packaging, and the GUI remain planned work.
 
 Open design investigations include:
 

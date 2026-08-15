@@ -352,6 +352,8 @@ internal static class CliApplication
         ProcessTree tree = result.ProcessTree;
         IReadOnlySet<int> mojoProcessIds =
             result.MojoPipeInspection.GetRelatedProcessIds();
+        IReadOnlyDictionary<int, CefProcessInfo> cefProcesses =
+            result.CefRuntime.Processes.ToDictionary(process => process.ProcessId);
         if (!options.AllProcesses)
         {
             HashSet<int> seeds = result.Processes
@@ -391,7 +393,7 @@ internal static class CliApplication
                 string.Empty,
                 true,
                 mojoProcessIds,
-                result.CefRuntime.Processes.ToDictionary(process => process.ProcessId));
+                cefProcesses);
         }
 
         if (result.CefRuntime.Associations.Count > 0)

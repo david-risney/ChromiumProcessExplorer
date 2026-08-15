@@ -272,6 +272,57 @@ public sealed class CefRuntimeAdapterTests : IDisposable
         Assert.False(association.IsAuthoritative);
     }
 
+    [Fact]
+    public void AnalyzeDoesNotTreatExternalCrashpadAsSubprocessLayout()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        string executable = @"C:\Apps\Sample\sample.exe";
+        ProcessSnapshotEntry browser = CreateProcess(
+            60,
+            1,
+            start,
+            executable,
+            $"\"{executable}\"") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+        ProcessSnapshotEntry renderer = CreateProcess(
+            61,
+            60,
+            start.AddSeconds(1),
+            executable,
+            $"\"{executable}\" --type=renderer",
+            "renderer") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+        ProcessSnapshotEntry crashpad = CreateProcess(
+            62,
+            60,
+            start.AddSeconds(2),
+            @"C:\Apps\Sample\crashpad_handler.exe",
+            "\"C:\\Apps\\Sample\\crashpad_handler.exe\" "
+                + "--type=crashpad-handler",
+            "crashpad-handler") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+
+        CefRuntimeAnalysis result = CefRuntimeAdapter.Analyze(
+            [browser, renderer, crashpad]);
+
+        Assert.All(
+            result.Processes,
+            process => Assert.Equal(
+                CefDeploymentLayout.SameExecutable,
+                process.Layout));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

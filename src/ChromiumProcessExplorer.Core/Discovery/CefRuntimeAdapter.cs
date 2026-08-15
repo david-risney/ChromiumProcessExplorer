@@ -370,43 +370,66 @@ public static class CefRuntimeAdapter
         Dictionary<int, Candidate> byProcessId = candidates.ToDictionary(
             candidate => candidate.Process.ProcessId);
 
-        foreach (Candidate candidate in candidates)
+        foreach (IGrouping<int, CefProcessAssociation> group in associations.GroupBy(
+            association => association.BrowserProcessId))
         {
+            Candidate browser = byProcessId[group.Key];
             string executableName = Path.GetFileName(
-                candidate.Process.ExecutablePath ?? candidate.Process.ImageName);
+                browser.Process.ExecutablePath ?? browser.Process.ImageName);
+            CefDeploymentLayout layout;
             if (executableName.Equals("bootstrap.exe", StringComparison.OrdinalIgnoreCase)
                 || executableName.Equals(
                     "bootstrapc.exe",
                     StringComparison.OrdinalIgnoreCase))
             {
-                layouts[candidate.Process.ProcessId] =
-                    CefDeploymentLayout.BootstrapOrDllHosted;
-            }
-        }
-
-        foreach (CefProcessAssociation association in associations)
-        {
-            Candidate browser = byProcessId[association.BrowserProcessId];
-            Candidate subprocess = byProcessId[association.SubprocessProcessId];
-            CefDeploymentLayout layout;
-            if (layouts.GetValueOrDefault(browser.Process.ProcessId)
-                == CefDeploymentLayout.BootstrapOrDllHosted)
-            {
                 layout = CefDeploymentLayout.BootstrapOrDllHosted;
             }
-            else if (PathsEqual(
-                browser.Process.ExecutablePath,
-                subprocess.Process.ExecutablePath))
-            {
-                layout = CefDeploymentLayout.SameExecutable;
-            }
-            else
+            else if (!string.IsNullOrWhiteSpace(
+                browser.RuntimePaths.BrowserSubprocessPath))
             {
                 layout = CefDeploymentLayout.SeparateSubprocess;
             }
+            else
+            {
+                Candidate[] chromiumSubprocesses = group
+                    .Select(association => byProcessId[association.SubprocessProcessId])
+                    .Where(candidate => candidate.Role != CefProcessRole.Crashpad)
+                    .ToArray();
+                layout = chromiumSubprocesses.Length > 0
+                    && chromiumSubprocesses.All(subprocess => PathsEqual(
+                        browser.Process.ExecutablePath,
+                        subprocess.Process.ExecutablePath))
+                        ? CefDeploymentLayout.SameExecutable
+                        : CefDeploymentLayout.SeparateSubprocess;
+            }
 
             layouts[browser.Process.ProcessId] = layout;
-            layouts[subprocess.Process.ProcessId] = layout;
+            foreach (CefProcessAssociation association in group)
+            {
+                layouts[association.SubprocessProcessId] = layout;
+            }
+        }
+
+        foreach (Candidate browser in candidates.Where(
+            candidate => candidate.Role == CefProcessRole.Browser
+                && !layouts.ContainsKey(candidate.Process.ProcessId)))
+        {
+            string executableName = Path.GetFileName(
+                browser.Process.ExecutablePath ?? browser.Process.ImageName);
+            if (executableName.Equals("bootstrap.exe", StringComparison.OrdinalIgnoreCase)
+                || executableName.Equals(
+                    "bootstrapc.exe",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                layouts[browser.Process.ProcessId] =
+                    CefDeploymentLayout.BootstrapOrDllHosted;
+            }
+            else if (!string.IsNullOrWhiteSpace(
+                browser.RuntimePaths.BrowserSubprocessPath))
+            {
+                layouts[browser.Process.ProcessId] =
+                    CefDeploymentLayout.SeparateSubprocess;
+            }
         }
 
         return layouts;
