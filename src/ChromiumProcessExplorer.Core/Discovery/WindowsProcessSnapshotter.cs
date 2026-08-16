@@ -176,8 +176,7 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
                     && reopenedCreationTime is not null
                     && basic.CreationTime != reopenedCreationTime)
                 {
-                    metadataError =
-                        "The process ID was reused after the system snapshot was captured.";
+                    metadataError = ProcessSnapshotEntry.ProcessIdReuseError;
                 }
                 else
                 {
