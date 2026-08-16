@@ -87,7 +87,8 @@ public sealed record CefProcessInfo(
     bool RemoteDebuggingPipe,
     IReadOnlyList<string> Wrappers,
     IReadOnlyList<CefSwitchWarning> SwitchWarnings,
-    IReadOnlyList<CefEvidence> Evidence);
+    IReadOnlyList<CefEvidence> Evidence,
+    string? ModuleInspectionError);
 
 /// <summary>
 /// A scored association between a CEF browser process and one subprocess.
@@ -100,11 +101,21 @@ public sealed record CefProcessAssociation(
     bool IsAuthoritative,
     IReadOnlyList<string> Evidence);
 
+/// <summary>A scored association between an application host and a CEF browser.</summary>
+public sealed record CefHostAssociation(
+    int HostProcessId,
+    int BrowserProcessId,
+    int Score,
+    CefAssociationConfidence Confidence,
+    bool IsAuthoritative,
+    IReadOnlyList<string> Evidence);
+
 /// <summary>CEF-specific analysis for a process snapshot.</summary>
 public sealed record CefRuntimeAnalysis(
     IReadOnlyList<CefProcessInfo> Processes,
-    IReadOnlyList<CefProcessAssociation> Associations)
+    IReadOnlyList<CefProcessAssociation> Associations,
+    IReadOnlyList<CefHostAssociation> HostAssociations)
 {
     /// <summary>Gets an empty CEF analysis.</summary>
-    public static CefRuntimeAnalysis Empty { get; } = new([], []);
+    public static CefRuntimeAnalysis Empty { get; } = new([], [], []);
 }

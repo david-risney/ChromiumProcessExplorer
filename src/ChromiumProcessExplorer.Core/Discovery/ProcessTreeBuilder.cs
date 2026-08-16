@@ -14,7 +14,9 @@ public static class ProcessTreeBuilder
         {
             if (node.Process.ParentProcessId <= 0
                 || node.Process.ParentProcessId == node.Process.ProcessId
+                || node.Process.IsProcessIdReused
                 || !nodes.TryGetValue(node.Process.ParentProcessId, out ProcessTreeNode? parent)
+                || parent.Process.IsProcessIdReused
                 || !IsValidGeneration(parent.Process, node.Process))
             {
                 continue;

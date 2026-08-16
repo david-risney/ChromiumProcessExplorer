@@ -8,6 +8,7 @@ public static class CefRuntimeAdapter
     private const string CefRuntimeAnchor = "libcef.dll";
     private const int MinimumCandidateAssociationScore = 50;
     private const int MinimumReportedAssociationScore = 35;
+    private const int MinimumReportedHostAssociationScore = 60;
     private const int HighConfidenceScore = 75;
     private const int MediumConfidenceScore = 50;
 
@@ -69,6 +70,9 @@ public static class CefRuntimeAdapter
             .ToArray();
 
         List<CefProcessAssociation> associations = [];
+        List<CefHostAssociation> hostAssociations = FindHostAssociations(
+            candidates,
+            browsers);
         HashSet<int> includedProcessIds = browsers
             .Select(candidate => candidate.Process.ProcessId)
             .ToHashSet();
@@ -97,12 +101,7 @@ public static class CefRuntimeAdapter
             Candidate browser = best.Value.Browser;
             AssociationScore score = best.Value.Score;
             includedProcessIds.Add(browser.Process.ProcessId);
-            CefAssociationConfidence confidence = score.Score switch
-            {
-                >= HighConfidenceScore => CefAssociationConfidence.High,
-                >= MediumConfidenceScore => CefAssociationConfidence.Medium,
-                _ => CefAssociationConfidence.Low,
-            };
+            CefAssociationConfidence confidence = GetConfidence(score.Score);
             bool authoritative = confidence == CefAssociationConfidence.High
                 && score.ValidatedParent
                 && candidate.HasExplicitProcessType;
@@ -131,7 +130,8 @@ public static class CefRuntimeAdapter
             associations
                 .OrderBy(association => association.BrowserProcessId)
                 .ThenBy(association => association.SubprocessProcessId)
-                .ToArray());
+                .ToArray(),
+            hostAssociations);
     }
 
     private static Candidate CreateCandidate(ProcessSnapshotEntry process)
@@ -248,7 +248,7 @@ public static class CefRuntimeAdapter
             "DevToolsActivePort");
         CefRuntimePaths runtimePaths = new(
             userDataDirectory,
-            commandLine.GetSwitchValue("log-file"),
+            GetFilePathSwitchValue(commandLine, "log-file"),
             commandLine.GetSwitchValue("resources-dir-path"),
             commandLine.GetSwitchValue("locales-dir-path"),
             commandLine.GetSwitchValue("browser-subprocess-path"),
@@ -280,6 +280,80 @@ public static class CefRuntimeAdapter
             evidence,
             hasDirectCefEvidence,
             hasCefAnchor);
+    }
+
+    private static List<CefHostAssociation> FindHostAssociations(
+        IReadOnlyList<Candidate> candidates,
+        IReadOnlyList<Candidate> browsers)
+    {
+        Dictionary<int, Candidate> byProcessId = candidates.ToDictionary(
+            candidate => candidate.Process.ProcessId);
+        List<CefHostAssociation> results = [];
+
+        foreach (Candidate browser in browsers)
+        {
+            if (!byProcessId.TryGetValue(
+                browser.Process.ParentProcessId,
+                out Candidate? host)
+                || host.Process.IsProcessIdReused
+                || !HasValidatedParentGeneration(host.Process, browser.Process))
+            {
+                continue;
+            }
+
+            int score = 40;
+            List<string> evidence =
+            [
+                "Generation-safe parent process relationship.",
+            ];
+            bool referencesHostProcessId = CommandLineReferencesValue(
+                browser.Process.CommandLine,
+                host.Process.ProcessId.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+            if (referencesHostProcessId)
+            {
+                score += 30;
+                evidence.Add(
+                    "The browser command line explicitly references the host process ID.");
+            }
+
+            bool referencesHostExecutable = CommandLineReferencesPath(
+                browser.Process.CommandLine,
+                host.Process.ExecutablePath);
+            if (referencesHostExecutable)
+            {
+                score += 30;
+                evidence.Add(
+                    "The browser command line explicitly references the host executable.");
+            }
+
+            if (browser.HasRuntimeEvidence)
+            {
+                score += 10;
+                evidence.Add("The browser has direct CEF runtime evidence.");
+            }
+
+            score = Math.Min(score, 100);
+            if (score < MinimumReportedHostAssociationScore)
+            {
+                continue;
+            }
+
+            CefAssociationConfidence confidence = GetConfidence(score);
+            results.Add(new CefHostAssociation(
+                host.Process.ProcessId,
+                browser.Process.ProcessId,
+                score,
+                confidence,
+                confidence == CefAssociationConfidence.High
+                    && (referencesHostProcessId || referencesHostExecutable),
+                evidence));
+        }
+
+        return results
+            .OrderBy(association => association.HostProcessId)
+            .ThenBy(association => association.BrowserProcessId)
+            .ToList();
     }
 
     private static CefProcessRole ClassifyRole(
@@ -564,6 +638,63 @@ public static class CefRuntimeAdapter
             : GetExistingSiblingFile(directory, fileName);
     }
 
+    private static string? GetFilePathSwitchValue(
+        ChromiumCommandLine commandLine,
+        string switchName)
+    {
+        string? value = commandLine.GetSwitchValue(switchName);
+        return !string.IsNullOrWhiteSpace(value)
+            && !value.All(char.IsAsciiDigit)
+                ? value
+                : null;
+    }
+
+    private static bool CommandLineReferencesValue(
+        string? commandLine,
+        string expectedValue)
+    {
+        ChromiumCommandLine parsed = ChromiumCommandLine.Parse(commandLine);
+        return parsed.Arguments
+            .Skip(1)
+            .Select(GetArgumentValue)
+            .Any(value => string.Equals(
+                value,
+                expectedValue,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool CommandLineReferencesPath(
+        string? commandLine,
+        string? expectedPath)
+    {
+        if (string.IsNullOrWhiteSpace(expectedPath))
+        {
+            return false;
+        }
+
+        ChromiumCommandLine parsed = ChromiumCommandLine.Parse(commandLine);
+        return parsed.Arguments
+            .Skip(1)
+            .Select(GetArgumentValue)
+            .Any(value => PathsEqual(value, expectedPath));
+    }
+
+    private static string GetArgumentValue(string argument)
+    {
+        int separator = argument.IndexOf('=');
+        return separator < 0 ? argument : argument[(separator + 1)..];
+    }
+
+    private static CefAssociationConfidence GetConfidence(int score)
+    {
+        return score switch
+        {
+            >= HighConfidenceScore => CefAssociationConfidence.High,
+            >= MediumConfidenceScore => CefAssociationConfidence.Medium,
+            _ => CefAssociationConfidence.Low,
+        };
+    }
+
     private sealed record Candidate(
         ProcessSnapshotEntry Process,
         CefProcessRole Role,
@@ -594,7 +725,8 @@ public static class CefRuntimeAdapter
                 RemoteDebuggingPipe,
                 Wrappers,
                 SwitchWarnings,
-                Evidence);
+                Evidence,
+                Process.ModuleInspectionError);
         }
     }
 

@@ -16,6 +16,9 @@ public sealed record ProcessSnapshotEntry(
     IReadOnlyList<string> Evidence,
     string? MetadataError)
 {
+    internal const string ProcessIdReuseError =
+        "The process ID was reused after the system snapshot was captured.";
+
     /// <summary>
     /// Gets loaded module paths supplied by the snapshot provider, when available.
     /// </summary>
@@ -31,4 +34,10 @@ public sealed record ProcessSnapshotEntry(
     public string Identity => CreationTime is null
         ? ProcessId.ToString(CultureInfo.InvariantCulture)
         : FormattableString.Invariant($"{ProcessId}@{CreationTime:O}");
+
+    /// <summary>Gets whether enrichment observed a different process generation.</summary>
+    public bool IsProcessIdReused => string.Equals(
+        MetadataError,
+        ProcessIdReuseError,
+        StringComparison.Ordinal);
 }

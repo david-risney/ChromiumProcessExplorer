@@ -16,9 +16,10 @@ installation details, and executable metadata into one place.
 The solution targets .NET 9 on Windows and contains:
 
 - **ChromiumProcessExplorer.Core** - reusable process discovery, Chromium
-  command-line parsing, generation-safe process-tree construction, CEF runtime
-  analysis, and Mojo pipe and installation enumeration. The public APIs can be
-  consumed by the CLI, a future GUI, or other .NET applications.
+  command-line parsing, typed process-graph and generation-safe process-tree
+  construction, CEF runtime analysis, and Mojo pipe and installation
+  enumeration. The public APIs can be consumed by the CLI, a future GUI, or
+  other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
   parsing, Mojo pipe recognition, process-tree generation, and CEF runtime
@@ -29,9 +30,11 @@ parallelism, and validates parent relationships with process creation times
 when available. Both `process-tree` and `mojo-pipes` consume the same
 endpoint-enriched Mojo inspection. Resolved server, client, and handle-owner
 PIDs are used as process evidence; the pipe-name PID is only a fallback when no
-endpoint can be resolved. The default process tree contains only processes with
-Chromium or Mojo evidence; unrelated ancestors are omitted. Use `--all` for the
-complete Windows process snapshot.
+endpoint can be resolved. The typed graph retains distinct OS-parent and Mojo
+edges, their raw evidence, source, confidence, and observation time. The
+default process tree and graph contain only processes with Chromium or Mojo
+evidence; unrelated ancestors are omitted. Use `--all` for the complete Windows
+process snapshot.
 
 ### Build and test
 
@@ -101,6 +104,11 @@ using ChromiumProcessExplorer.Core.Discovery;
 ChromiumProcessDiscovery discovery = new();
 ChromiumDiscoveryResult result = await discovery.DiscoverAsync();
 
+foreach (ProcessGraphEdge edge in result.ProcessGraph.Edges)
+{
+    Console.WriteLine($"{edge.Type}: {edge.Source} -> {edge.Target}");
+}
+
 foreach (ProcessTreeNode root in result.ProcessTree.Roots)
 {
     Console.WriteLine($"{root.Process.ProcessId} {root.Process.ImageName}");
@@ -134,10 +142,10 @@ as:
 - Network service
 - Utility and other specialized subprocesses
 
-For WebView2 applications, the tree also associates browser processes with the
-native host application that owns them. The Electron and CEF process models
-require further investigation so equivalent relationships can be represented
-accurately.
+For CEF applications, the tree classifies browser and subprocess roles and can
+associate a browser with its native host when generation-safe ancestry and
+explicit command-line references corroborate the relationship. WebView2 and
+Electron need deeper platform-specific host-association adapters.
 
 ### Runtime diagnostics
 
@@ -197,13 +205,13 @@ before sharing it.
 The process, Mojo endpoint, and initial installation discovery foundations are
 implemented. CEF process roles, deployment layouts, explicit runtime paths,
 wrapper markers, risky switches, loaded-module evidence, and confidence-scored
-browser/subprocess associations are also exposed. HWND evidence, deeper
-platform-specific WebView2 and Electron adapters, logging diagnostics,
-packaging, and the GUI remain planned work.
+browser/subprocess and host/browser associations are also exposed. HWND
+evidence, deeper platform-specific WebView2 and Electron adapters, logging
+diagnostics, packaging, and the GUI remain planned work.
 
 Open design investigations include:
 
-- Reliable host-to-browser association for Electron and CEF applications
+- Additional host-to-browser evidence for CEF and Electron applications
 - Administrative elevation for Copilot skill execution
 - Whether an elevated MCP server is the appropriate Copilot integration model
 - The exact compatibility scope with WebView2Utilities

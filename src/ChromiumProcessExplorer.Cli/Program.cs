@@ -350,6 +350,7 @@ internal static class CliApplication
     private static void WriteTree(ChromiumDiscoveryResult result, CliOptions options)
     {
         ProcessTree tree = result.ProcessTree;
+        ProcessGraph graph = result.ProcessGraph;
         IReadOnlySet<int> mojoProcessIds =
             result.MojoPipeInspection.GetRelatedProcessIds();
         IReadOnlyDictionary<int, CefProcessInfo> cefProcesses =
@@ -360,9 +361,12 @@ internal static class CliApplication
                 .Where(process => process.IsLikelyChromium)
                 .Select(process => process.ProcessId)
                 .Concat(result.CefRuntime.Processes.Select(process => process.ProcessId))
+                .Concat(result.CefRuntime.HostAssociations.Select(
+                    association => association.HostProcessId))
                 .Concat(mojoProcessIds)
                 .ToHashSet();
             tree = tree.CreateFilteredView(seeds);
+            graph = graph.CreateFilteredView(seeds);
         }
 
         if (options.Json)
@@ -373,6 +377,7 @@ internal static class CliApplication
                     result.CapturedAt,
                     Roots = tree.Roots.Select(ToSerializableNode),
                     result.CefRuntime,
+                    ProcessGraph = graph,
                     result.MojoPipeInspection,
                     result.Issues,
                 },
@@ -409,6 +414,24 @@ internal static class CliApplication
                     $"  browser {association.BrowserProcessId} -> "
                     + $"subprocess {association.SubprocessProcessId}: "
                     + $"{association.Confidence} ({association.Score}/100, {authority})");
+            }
+        }
+
+        if (result.CefRuntime.HostAssociations.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("CEF host associations");
+            foreach (CefHostAssociation association in
+                result.CefRuntime.HostAssociations)
+            {
+                string authority = association.IsAuthoritative
+                    ? "authoritative"
+                    : "inferred";
+                Console.WriteLine(
+                    $"  host {association.HostProcessId} -> "
+                    + $"browser {association.BrowserProcessId}: "
+                    + $"{association.Confidence} "
+                    + $"({association.Score}/100, {authority})");
             }
         }
 
@@ -527,6 +550,12 @@ internal static class CliApplication
             Console.WriteLine(
                 $"{prefix}cef evidence: {evidence.Source}: "
                 + $"{evidence.Path ?? evidence.Detail}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(cef.ModuleInspectionError))
+        {
+            Console.WriteLine(
+                $"{prefix}module inspection error: {cef.ModuleInspectionError}");
         }
     }
 

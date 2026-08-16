@@ -450,6 +450,89 @@ public sealed class CefRuntimeAdapterTests : IDisposable
                 StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void AnalyzeAssociatesExplicitlyReferencedHostWithBrowser()
+    {
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        string hostExecutable = @"C:\Program Files (x86)\Steam\steam.exe";
+        string browserExecutable =
+            @"C:\Program Files (x86)\Steam\bin\cef\steamwebhelper.exe";
+        ProcessSnapshotEntry host = CreateProcess(
+            100,
+            1,
+            start,
+            hostExecutable,
+            $"\"{hostExecutable}\"");
+        ProcessSnapshotEntry browser = CreateProcess(
+            101,
+            100,
+            start.AddSeconds(1),
+            browserExecutable,
+            $"\"{browserExecutable}\" -steampid=100 "
+                + $"-steampath=\"{hostExecutable}\"") with
+        {
+            LoadedModules =
+            [
+                @"C:\Program Files (x86)\Steam\bin\cef\libcef.dll",
+            ],
+        };
+
+        CefHostAssociation association = Assert.Single(
+            CefRuntimeAdapter.Analyze([host, browser]).HostAssociations);
+
+        Assert.Equal(100, association.HostProcessId);
+        Assert.Equal(101, association.BrowserProcessId);
+        Assert.Equal(CefAssociationConfidence.High, association.Confidence);
+        Assert.True(association.IsAuthoritative);
+    }
+
+    [Fact]
+    public void AnalyzeDoesNotAssumeEveryBrowserParentIsItsHost()
+    {
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        ProcessSnapshotEntry parent = CreateProcess(
+            110,
+            1,
+            start,
+            @"C:\Windows\explorer.exe",
+            "\"C:\\Windows\\explorer.exe\"");
+        ProcessSnapshotEntry browser = CreateProcess(
+            111,
+            110,
+            start.AddSeconds(1),
+            @"C:\Apps\Sample\sample.exe",
+            "\"C:\\Apps\\Sample\\sample.exe\"") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+
+        CefRuntimeAnalysis analysis = CefRuntimeAdapter.Analyze([parent, browser]);
+
+        Assert.Empty(analysis.HostAssociations);
+    }
+
+    [Fact]
+    public void AnalyzeDoesNotPresentNumericLogHandleAsFilePath()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            120,
+            1,
+            DateTimeOffset.UtcNow,
+            @"C:\Apps\Sample\sample.exe",
+            "\"C:\\Apps\\Sample\\sample.exe\" --log-file=2280") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+
+        CefProcessInfo result = Assert.Single(
+            CefRuntimeAdapter.Analyze([process]).Processes);
+
+        Assert.Null(result.RuntimePaths.LogFile);
+        Assert.Contains(
+            result.Evidence,
+            evidence => evidence.Detail == "--log-file=2280");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

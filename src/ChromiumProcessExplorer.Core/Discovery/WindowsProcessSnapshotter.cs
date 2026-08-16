@@ -180,8 +180,7 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
                     && reopenedCreationTime is not null
                     && basic.CreationTime != reopenedCreationTime)
                 {
-                    metadataError =
-                        "The process ID was reused after the system snapshot was captured.";
+                    metadataError = ProcessSnapshotEntry.ProcessIdReuseError;
                 }
                 else
                 {
@@ -226,7 +225,9 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
         }
 
         (IReadOnlyList<string> loadedModules, string? moduleInspectionError) =
-            QueryLoadedModules(basic.ProcessId);
+            metadataError == ProcessSnapshotEntry.ProcessIdReuseError
+                ? ([], ProcessSnapshotEntry.ProcessIdReuseError)
+                : QueryLoadedModules(basic);
         return new ProcessSnapshotEntry(
             basic.ProcessId,
             basic.ParentProcessId,
@@ -246,17 +247,25 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
     }
 
     private static (IReadOnlyList<string> Modules, string? Error)
-        QueryLoadedModules(int processId)
+        QueryLoadedModules(BasicProcessEntry basic)
     {
         using SafeFileHandle process = NativeMethods.OpenProcess(
             ProcessQueryInformation | ProcessVmRead,
             false,
-            processId);
+            basic.ProcessId);
         if (process.IsInvalid)
         {
             return (
                 [],
                 new Win32Exception(Marshal.GetLastWin32Error()).Message);
+        }
+
+        DateTimeOffset? reopenedCreationTime = QueryCreationTime(process);
+        if (basic.CreationTime is not null
+            && reopenedCreationTime is not null
+            && basic.CreationTime != reopenedCreationTime)
+        {
+            return ([], ProcessSnapshotEntry.ProcessIdReuseError);
         }
 
         nint[] modules = new nint[64];
@@ -284,6 +293,8 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
 
                 int moduleCount = bytesNeeded / nint.Size;
                 List<string> paths = new(moduleCount);
+                int failedPathCount = 0;
+                int lastError = 0;
                 char[] pathBuffer = new char[32768];
                 for (int index = 0; index < moduleCount; index++)
                 {
@@ -296,11 +307,20 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
                     {
                         paths.Add(new string(pathBuffer, 0, checked((int)length)));
                     }
+                    else
+                    {
+                        failedPathCount++;
+                        lastError = Marshal.GetLastWin32Error();
+                    }
                 }
 
                 return (
                     paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    null);
+                    failedPathCount == 0
+                        ? null
+                        : $"Could not read {failedPathCount} of {moduleCount} "
+                            + $"loaded module paths: "
+                            + new Win32Exception(lastError).Message);
             }
 
             int requestedCount = checked((int)(
