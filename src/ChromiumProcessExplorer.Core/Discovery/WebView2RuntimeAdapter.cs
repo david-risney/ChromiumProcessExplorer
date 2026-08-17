@@ -164,7 +164,9 @@ public static class WebView2RuntimeAdapter
             StringComparison.OrdinalIgnoreCase);
         ChromiumCommandLine commandLine = ChromiumCommandLine.Parse(
             process.CommandLine);
-        bool isBrowser = isRuntime && !commandLine.HasSwitch("type");
+        bool isBrowser = isRuntime
+            && process.CommandLine is not null
+            && !commandLine.HasSwitch("type");
         return new Candidate(
             process,
             evidence.Count > 0 && !isRuntime,
@@ -206,6 +208,7 @@ public static class WebView2RuntimeAdapter
                     || !Path.GetFileName(process.ExecutablePath ?? process.ImageName).Equals(
                         "msedgewebview2.exe",
                         StringComparison.OrdinalIgnoreCase)
+                    || process.CommandLine is null
                     || ChromiumCommandLine.Parse(process.CommandLine).HasSwitch("type"))
                 {
                     continue;

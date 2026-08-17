@@ -25,6 +25,26 @@ public sealed class WebView2RuntimeAdapterTests
     }
 
     [Fact]
+    public void AnalyzeDoesNotTreatRuntimeWithUnavailableCommandLineAsBrowser()
+    {
+        ProcessSnapshotEntry host = CreateHost(100);
+        ProcessSnapshotEntry runtime = CreateBrowser(200, 100) with
+        {
+            CommandLine = null,
+            MetadataError = "Access is denied.",
+        };
+
+        WebView2RuntimeAnalysis result = WebView2RuntimeAdapter.Analyze(
+            [host, runtime],
+            CreateInspection());
+
+        Assert.Empty(result.HostAssociations);
+        Assert.Equal(
+            WebView2ProcessRole.Subprocess,
+            result.Processes.Single(process => process.ProcessId == 200).Role);
+    }
+
+    [Fact]
     public void AnalyzeAssociatesModuleHostThroughGenerationSafeParent()
     {
         ProcessSnapshotEntry host = CreateHost(100);

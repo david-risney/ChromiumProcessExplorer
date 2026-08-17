@@ -23,6 +23,7 @@ public sealed class WindowsWindowSnapshotProvider : IWindowSnapshotProvider
         Dictionary<int, ProcessSnapshotEntry> processesById = processes
             .ToDictionary(process => process.ProcessId);
         Dictionary<long, RawWindow> windows = [];
+        HashSet<long> topLevelWindowHandles = [];
         List<DiscoveryIssue> issues = [];
         bool cancellationRequested = false;
         EnumWindowsCallback callback = (window, _) =>
@@ -33,6 +34,7 @@ public sealed class WindowsWindowSnapshotProvider : IWindowSnapshotProvider
                 return false;
             }
 
+            topLevelWindowHandles.Add(window.ToInt64());
             AddWindow(window, null);
             return true;
         };
@@ -49,11 +51,10 @@ public sealed class WindowsWindowSnapshotProvider : IWindowSnapshotProvider
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        foreach (RawWindow topLevelWindow in windows.Values
-            .Where(window => window.ParentWindowHandle is null)
-            .ToArray())
+        foreach (long topLevelWindowHandle in topLevelWindowHandles)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            RawWindow topLevelWindow = windows[topLevelWindowHandle];
             EnumWindowsCallback childCallback = (window, _) =>
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -169,16 +170,26 @@ public sealed class WindowsWindowSnapshotProvider : IWindowSnapshotProvider
             int ownerProcessId = ownerProcessIdValue <= int.MaxValue
                 ? checked((int)ownerProcessIdValue)
                 : 0;
+            int ownerError = threadId == 0 || ownerProcessId == 0
+                ? Marshal.GetLastWin32Error()
+                : 0;
             char[] classNameBuffer = new char[MaximumClassNameLength];
             int classNameLength = NativeMethods.GetClassName(
                 window,
                 classNameBuffer,
                 classNameBuffer.Length);
             string? inspectionError = null;
+            if (threadId == 0 || ownerProcessId == 0)
+            {
+                inspectionError = ownerError == 0
+                    ? "The window no longer has a process owner."
+                    : new Win32Exception(ownerError).Message;
+            }
+
             if (classNameLength == 0)
             {
                 int error = Marshal.GetLastWin32Error();
-                if (error != 0)
+                if (inspectionError is null && error != 0)
                 {
                     inspectionError = new Win32Exception(error).Message;
                 }
