@@ -58,6 +58,16 @@ internal static class CliApplication
                 return 0;
             }
 
+            if (options.Command == "cdp")
+            {
+                CdpDiscoveryResult cdp = await discovery.DiscoverCdpAsync(
+                    workerOptions,
+                    options.MaximumConcurrency,
+                    cancellation.Token);
+                WriteCdp(cdp, options.Json);
+                return 0;
+            }
+
             if (options.Command == "mojo-pipes")
             {
                 if (options.NamesOnly)
@@ -198,6 +208,65 @@ internal static class CliApplication
                 + "were inaccessible and "
                 + $"{statistics.TruncatedDirectoryCount} directories exceeded the "
                 + "configured scan depth.");
+        }
+    }
+
+    private static void WriteCdp(CdpDiscoveryResult result, bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        if (result.Transports.Count == 0)
+        {
+            Console.WriteLine("No configured CDP transports found.");
+            return;
+        }
+
+        foreach (DiscoveryIssue issue in result.Issues)
+        {
+            Console.Error.WriteLine($"warning: {issue.Stage}: {issue.Message}");
+        }
+
+        foreach (CdpTransportInfo transport in result.Transports)
+        {
+            string endpoint = transport.Port is int port
+                ? $" port {port}"
+                : string.Empty;
+            Console.WriteLine(
+                $"PID {transport.ProcessId}: {transport.Kind} "
+                + $"{transport.Status}{endpoint}");
+            if (transport.WebSocketDebuggerUrl is not null)
+            {
+                Console.WriteLine(
+                    $"  browser WebSocket: {transport.WebSocketDebuggerUrl}");
+            }
+
+            if (transport.Browser is not null)
+            {
+                Console.WriteLine($"  browser: {transport.Browser}");
+            }
+
+            if (transport.ControllerProcessId is int controllerProcessId)
+            {
+                string image = transport.ControllerImageName is null
+                    ? string.Empty
+                    : $" {transport.ControllerImageName}";
+                Console.WriteLine(
+                    $"  existing controller: {controllerProcessId}{image}");
+            }
+
+            if (transport.Restriction is not null)
+            {
+                Console.WriteLine($"  restriction: {transport.Restriction}");
+            }
+
+            if (transport.Error is not null)
+            {
+                Console.WriteLine($"  note: {transport.Error}");
+            }
         }
     }
 
@@ -363,6 +432,7 @@ internal static class CliApplication
                 .Concat(result.CefRuntime.Processes.Select(process => process.ProcessId))
                 .Concat(result.CefRuntime.HostAssociations.Select(
                     association => association.HostProcessId))
+                .Concat(result.Cdp.Transports.Select(transport => transport.ProcessId))
                 .Concat(mojoProcessIds)
                 .ToHashSet();
             tree = tree.CreateFilteredView(seeds);
@@ -377,6 +447,7 @@ internal static class CliApplication
                     result.CapturedAt,
                     Roots = tree.Roots.Select(ToSerializableNode),
                     result.CefRuntime,
+                    result.Cdp,
                     ProcessGraph = graph,
                     result.MojoPipeInspection,
                     result.Issues,
@@ -587,6 +658,7 @@ internal static class CliApplication
                 case "process-tree":
                 case "mojo-pipes":
                 case "installations":
+                case "cdp":
                     if (commandSeen)
                     {
                         options = null!;
@@ -640,11 +712,13 @@ internal static class CliApplication
               cpe [process-tree] [--json] [--all] [--concurrency N]
               cpe mojo-pipes [--json] [--names-only] [--concurrency N]
               cpe installations [--json] [--concurrency N]
+              cpe cdp [--json] [--concurrency N]
 
             Commands:
               process-tree  Show Chromium-related processes and their process ancestry.
               mojo-pipes    Inspect Mojo pipes and their server/client processes.
               installations Find Chromium browsers, runtimes, and applications.
+              cdp           Discover configured and validated CDP transports.
 
             Options:
               --all            Include every process in the process tree.

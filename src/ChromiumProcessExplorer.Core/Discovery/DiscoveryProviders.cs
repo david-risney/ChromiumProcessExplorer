@@ -28,3 +28,13 @@ public interface IInstallationProvider
         IReadOnlyList<ProcessSnapshotEntry> runningProcesses,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>Discovers configured and validated CDP transports.</summary>
+public interface ICdpEndpointProvider
+{
+    /// <summary>Analyzes CDP transport evidence for one process snapshot.</summary>
+    ValueTask<CdpDiscoveryResult> DiscoverAsync(
+        IReadOnlyList<ProcessSnapshotEntry> processes,
+        HandleQueryWorkerOptions? workerOptions = null,
+        CancellationToken cancellationToken = default);
+}
