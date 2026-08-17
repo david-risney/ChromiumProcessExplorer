@@ -9,6 +9,17 @@ public interface IProcessSnapshotProvider
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Provides an optional snapshot of native Windows window topology.</summary>
+public interface IWindowSnapshotProvider
+{
+    /// <summary>
+    /// Captures top-level and descendant windows, preserving partial failures.
+    /// </summary>
+    ValueTask<WindowSnapshotResult> CaptureAsync(
+        IReadOnlyList<ProcessSnapshotEntry> processes,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>Provides Mojo named-pipe candidates.</summary>
 public interface IMojoPipeProvider
 {
