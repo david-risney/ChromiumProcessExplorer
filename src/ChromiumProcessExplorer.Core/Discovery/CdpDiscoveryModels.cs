@@ -46,9 +46,35 @@ public sealed record CdpTransportInfo(
     string? Browser,
     string? ProtocolVersion,
     string? Error,
-    IReadOnlyList<string> Evidence);
+    IReadOnlyList<string> Evidence)
+{
+    /// <summary>Gets a product restriction that prevents the transport.</summary>
+    public string? Restriction { get; init; }
+
+    /// <summary>Gets the existing controller for an occupied pipe transport.</summary>
+    public int? ControllerProcessId { get; init; }
+
+    /// <summary>Gets the existing controller image name, when known.</summary>
+    public string? ControllerImageName { get; init; }
+
+    /// <summary>Gets passive endpoint metadata for an occupied pipe transport.</summary>
+    public IReadOnlyList<CdpPipeConnection> PipeConnections { get; init; } = [];
+}
+
+/// <summary>Passive metadata for one inherited debugging-pipe endpoint.</summary>
+public sealed record CdpPipeConnection(
+    ulong BrowserHandleValue,
+    string? ObjectName,
+    int? ServerProcessId,
+    int? ClientProcessId,
+    string? LocalEnd,
+    string? State);
 
 /// <summary>CDP transport discovery for one process snapshot.</summary>
 public sealed record CdpDiscoveryResult(
     DateTimeOffset CapturedAt,
-    IReadOnlyList<CdpTransportInfo> Transports);
+    IReadOnlyList<CdpTransportInfo> Transports)
+{
+    /// <summary>Gets partial-coverage and inspection issues.</summary>
+    public IReadOnlyList<DiscoveryIssue> Issues { get; init; } = [];
+}

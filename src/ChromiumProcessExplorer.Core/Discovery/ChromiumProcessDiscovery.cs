@@ -82,8 +82,6 @@ public sealed class ChromiumProcessDiscovery
         IReadOnlyList<ProcessSnapshotEntry> processes = await processTask;
         MojoPipeEnumerationResult pipeResult = await pipeTask;
         CefRuntimeAnalysis cefRuntime = CefRuntimeAdapter.Analyze(processes);
-        ValueTask<CdpDiscoveryResult> cdpTask =
-            _cdpEndpointProvider.DiscoverAsync(processes, cancellationToken);
         MojoPipeInspectionResult inspection = await InspectMojoPipesAsync(
             pipeResult,
             processes,
@@ -95,7 +93,10 @@ public sealed class ChromiumProcessDiscovery
             capturedAt,
             cefRuntime);
         ProcessTree tree = graph.CreateProcessTree();
-        CdpDiscoveryResult cdp = await cdpTask;
+        CdpDiscoveryResult cdp = await _cdpEndpointProvider.DiscoverAsync(
+            processes,
+            workerOptions,
+            cancellationToken);
 
         return new ChromiumDiscoveryResult(
             capturedAt,
@@ -136,15 +137,19 @@ public sealed class ChromiumProcessDiscovery
 
     /// <summary>Discovers configured and validated CDP transports.</summary>
     public async ValueTask<CdpDiscoveryResult> DiscoverCdpAsync(
+        HandleQueryWorkerOptions workerOptions,
         int? maximumProcessConcurrency = null,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(workerOptions);
+
         IReadOnlyList<ProcessSnapshotEntry> processes =
             await _processSnapshotter.CaptureAsync(
                 maximumProcessConcurrency,
                 cancellationToken);
         return await _cdpEndpointProvider.DiscoverAsync(
             processes,
+            workerOptions,
             cancellationToken);
     }
 

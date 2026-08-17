@@ -61,6 +61,7 @@ internal static class CliApplication
             if (options.Command == "cdp")
             {
                 CdpDiscoveryResult cdp = await discovery.DiscoverCdpAsync(
+                    workerOptions,
                     options.MaximumConcurrency,
                     cancellation.Token);
                 WriteCdp(cdp, options.Json);
@@ -224,6 +225,11 @@ internal static class CliApplication
             return;
         }
 
+        foreach (DiscoveryIssue issue in result.Issues)
+        {
+            Console.Error.WriteLine($"warning: {issue.Stage}: {issue.Message}");
+        }
+
         foreach (CdpTransportInfo transport in result.Transports)
         {
             string endpoint = transport.Port is int port
@@ -241,6 +247,20 @@ internal static class CliApplication
             if (transport.Browser is not null)
             {
                 Console.WriteLine($"  browser: {transport.Browser}");
+            }
+
+            if (transport.ControllerProcessId is int controllerProcessId)
+            {
+                string image = transport.ControllerImageName is null
+                    ? string.Empty
+                    : $" {transport.ControllerImageName}";
+                Console.WriteLine(
+                    $"  existing controller: {controllerProcessId}{image}");
+            }
+
+            if (transport.Restriction is not null)
+            {
+                Console.WriteLine($"  restriction: {transport.Restriction}");
             }
 
             if (transport.Error is not null)

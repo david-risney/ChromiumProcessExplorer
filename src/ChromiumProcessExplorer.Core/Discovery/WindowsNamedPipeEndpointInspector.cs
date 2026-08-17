@@ -351,7 +351,7 @@ internal static partial class WindowsNamedPipeEndpointInspector
         return separator >= 0 ? objectName[(separator + 1)..] : objectName;
     }
 
-    private sealed class HandleQueryProcess : IAsyncDisposable
+    internal sealed class HandleQueryProcess : IAsyncDisposable
     {
         private readonly string _executablePath;
         private readonly TimeSpan _queryTimeout;
@@ -510,7 +510,7 @@ internal static partial class WindowsNamedPipeEndpointInspector
         }
     }
 
-    private sealed class HandleQueryTimeoutException : TimeoutException
+    internal sealed class HandleQueryTimeoutException : TimeoutException
     {
         public HandleQueryTimeoutException(string queryStage, TimeSpan elapsed)
             : base($"The handle query timed out during {queryStage}.")

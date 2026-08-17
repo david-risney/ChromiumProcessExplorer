@@ -35,5 +35,6 @@ public interface ICdpEndpointProvider
     /// <summary>Analyzes CDP transport evidence for one process snapshot.</summary>
     ValueTask<CdpDiscoveryResult> DiscoverAsync(
         IReadOnlyList<ProcessSnapshotEntry> processes,
+        HandleQueryWorkerOptions? workerOptions = null,
         CancellationToken cancellationToken = default);
 }
