@@ -11,7 +11,8 @@ public static class ProcessGraphBuilder
         IEnumerable<ProcessSnapshotEntry> processes,
         MojoPipeInspectionResult mojoInspection,
         DateTimeOffset processObservedAt,
-        CefRuntimeAnalysis? cefRuntime = null)
+        CefRuntimeAnalysis? cefRuntime = null,
+        WebView2RuntimeAnalysis? webView2Runtime = null)
     {
         ArgumentNullException.ThrowIfNull(processes);
         ArgumentNullException.ThrowIfNull(mojoInspection);
@@ -110,6 +111,70 @@ public static class ProcessGraphBuilder
                 association.Confidence,
                 association.IsAuthoritative,
                 association.Evidence);
+        }
+
+        foreach (WebView2HostAssociation association in
+            webView2Runtime?.HostAssociations ?? [])
+        {
+            if (!TryGetCurrentProcess(
+                association.HostProcessId,
+                out ProcessSnapshotEntry? host)
+                || !TryGetCurrentProcess(
+                    association.BrowserProcessId,
+                    out ProcessSnapshotEntry? browser))
+            {
+                continue;
+            }
+
+            edges.Add(new ProcessGraphEdge(
+                GetIdentity(host),
+                GetIdentity(browser),
+                ProcessRelationshipType.EmbeddedBy,
+                new ProcessRelationshipEvidence(
+                    "webview2-runtime-adapter",
+                    association.Confidence,
+                    webView2Runtime!.WindowSnapshot.CapturedAt
+                        == DateTimeOffset.MinValue
+                            ? processObservedAt
+                            : webView2Runtime.WindowSnapshot.CapturedAt,
+                    new Dictionary<string, string?>
+                    {
+                        ["score"] = association.Score.ToString(
+                            CultureInfo.InvariantCulture),
+                        ["isAuthoritative"] = association.IsAuthoritative.ToString(
+                            CultureInfo.InvariantCulture),
+                        ["evidence"] = string.Join(
+                            " ",
+                            association.Evidence.Select(item => item.Detail)),
+                    })));
+
+            WebView2Evidence[] windowEvidence = association.Evidence
+                .Where(item => item.Source is
+                    "child-window" or "window-property" or "window-class")
+                .ToArray();
+            if (windowEvidence.Length > 0)
+            {
+                edges.Add(new ProcessGraphEdge(
+                    GetIdentity(host),
+                    GetIdentity(browser),
+                    ProcessRelationshipType.CrossProcessWindow,
+                    new ProcessRelationshipEvidence(
+                        "windows-window-snapshot",
+                        ProcessRelationshipConfidence.High,
+                        webView2Runtime.WindowSnapshot.CapturedAt,
+                        new Dictionary<string, string?>
+                        {
+                            ["windowHandles"] = string.Join(
+                                ", ",
+                                windowEvidence
+                                    .Where(item => item.WindowHandle is not null)
+                                    .Select(item => $"0x{item.WindowHandle:X}")
+                                    .Distinct()),
+                            ["evidence"] = string.Join(
+                                " ",
+                                windowEvidence.Select(item => item.Detail)),
+                        })));
+            }
         }
 
         return new ProcessGraph(processArray, edges);

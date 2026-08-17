@@ -90,6 +90,7 @@ internal static class CliApplication
             ChromiumDiscoveryResult result = await discovery.DiscoverAsync(
                 workerOptions,
                 options.MaximumConcurrency,
+                options.IncludeWindowEvidence,
                 cancellation.Token);
 
             WriteTree(result, options);
@@ -424,6 +425,9 @@ internal static class CliApplication
             result.MojoPipeInspection.GetRelatedProcessIds();
         IReadOnlyDictionary<int, CefProcessInfo> cefProcesses =
             result.CefRuntime.Processes.ToDictionary(process => process.ProcessId);
+        IReadOnlyDictionary<int, WebView2ProcessInfo> webView2Processes =
+            result.WebView2Runtime.Processes.ToDictionary(
+                process => process.ProcessId);
         if (!options.AllProcesses)
         {
             HashSet<int> seeds = result.Processes
@@ -431,6 +435,10 @@ internal static class CliApplication
                 .Select(process => process.ProcessId)
                 .Concat(result.CefRuntime.Processes.Select(process => process.ProcessId))
                 .Concat(result.CefRuntime.HostAssociations.Select(
+                    association => association.HostProcessId))
+                .Concat(result.WebView2Runtime.Processes.Select(
+                    process => process.ProcessId))
+                .Concat(result.WebView2Runtime.HostAssociations.Select(
                     association => association.HostProcessId))
                 .Concat(result.Cdp.Transports.Select(transport => transport.ProcessId))
                 .Concat(mojoProcessIds)
@@ -447,6 +455,7 @@ internal static class CliApplication
                     result.CapturedAt,
                     Roots = tree.Roots.Select(ToSerializableNode),
                     result.CefRuntime,
+                    result.WebView2Runtime,
                     result.Cdp,
                     ProcessGraph = graph,
                     result.MojoPipeInspection,
@@ -469,7 +478,8 @@ internal static class CliApplication
                 string.Empty,
                 true,
                 mojoProcessIds,
-                cefProcesses);
+                cefProcesses,
+                webView2Processes);
         }
 
         if (result.CefRuntime.Associations.Count > 0)
@@ -506,6 +516,36 @@ internal static class CliApplication
             }
         }
 
+        if (result.WebView2Runtime.HostAssociations.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("WebView2 host associations");
+            foreach (WebView2HostAssociation association in
+                result.WebView2Runtime.HostAssociations)
+            {
+                string authority = association.IsAuthoritative
+                    ? "authoritative"
+                    : "inferred";
+                Console.WriteLine(
+                    $"  host {association.HostProcessId} -> "
+                    + $"browser {association.BrowserProcessId}: "
+                    + $"{association.Confidence} "
+                    + $"({association.Score}/100, {authority})");
+                foreach (WebView2Evidence evidence in association.Evidence)
+                {
+                    Console.WriteLine(
+                        $"    {evidence.Source}: "
+                        + $"{evidence.RawValue ?? evidence.Detail}");
+                }
+            }
+        }
+
+        foreach (DiscoveryIssue issue in result.WebView2Runtime.Issues)
+        {
+            Console.Error.WriteLine(
+                $"warning: {issue.Stage}: {issue.Message}");
+        }
+
         Console.WriteLine();
         WritePipeCoverageNotes(result.MojoPipeInspection);
     }
@@ -524,10 +564,14 @@ internal static class CliApplication
         string prefix,
         bool isLast,
         IReadOnlySet<int> mojoProcessIds,
-        IReadOnlyDictionary<int, CefProcessInfo> cefProcesses)
+        IReadOnlyDictionary<int, CefProcessInfo> cefProcesses,
+        IReadOnlyDictionary<int, WebView2ProcessInfo> webView2Processes)
     {
         ProcessSnapshotEntry process = node.Process;
         _ = cefProcesses.TryGetValue(process.ProcessId, out CefProcessInfo? cef);
+        _ = webView2Processes.TryGetValue(
+            process.ProcessId,
+            out WebView2ProcessInfo? webView2);
         string branch = isLast ? "`- " : "|- ";
         string type = process.ChromiumProcessType is null
             ? string.Empty
@@ -536,16 +580,24 @@ internal static class CliApplication
         string cefBadge = cef is null
             ? string.Empty
             : $" [CEF:{cef.Role}] [{cef.Layout}]";
+        string webView2Badge = webView2 is null
+            ? string.Empty
+            : $" [WebView2:{webView2.Role}]";
         string path = process.ExecutablePath is null ? string.Empty : $" {process.ExecutablePath}";
 
         Console.WriteLine(
             $"{prefix}{branch}{process.ProcessId} {process.ImageName}"
-            + $"{type}{cefBadge}{mojo}{path}");
+            + $"{type}{cefBadge}{webView2Badge}{mojo}{path}");
 
         string childPrefix = prefix + (isLast ? "   " : "|  ");
         if (cef is not null)
         {
             WriteCefDetails(cef, process.CommandLine, childPrefix);
+        }
+
+        if (webView2 is not null)
+        {
+            WriteWebView2Details(webView2, childPrefix);
         }
 
         for (int index = 0; index < node.Children.Count; index++)
@@ -555,7 +607,27 @@ internal static class CliApplication
                 childPrefix,
                 index == node.Children.Count - 1,
                 mojoProcessIds,
-                cefProcesses);
+                cefProcesses,
+                webView2Processes);
+        }
+    }
+
+    private static void WriteWebView2Details(
+        WebView2ProcessInfo process,
+        string prefix)
+    {
+        foreach (WebView2Evidence evidence in process.Evidence)
+        {
+            Console.WriteLine(
+                $"{prefix}webview2 evidence: {evidence.Source}: "
+                + $"{evidence.RawValue ?? evidence.Detail}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(process.ModuleInspectionError))
+        {
+            Console.WriteLine(
+                $"{prefix}module inspection error: "
+                + process.ModuleInspectionError);
         }
     }
 
@@ -647,6 +719,7 @@ internal static class CliApplication
         bool json = false;
         bool all = false;
         bool namesOnly = false;
+        bool includeWindowEvidence = false;
         bool help = false;
         int? concurrency = null;
         bool commandSeen = false;
@@ -677,6 +750,9 @@ internal static class CliApplication
                 case "--names-only":
                     namesOnly = true;
                     break;
+                case "--windows":
+                    includeWindowEvidence = true;
+                    break;
                 case "--help":
                 case "-h":
                     help = true;
@@ -698,7 +774,14 @@ internal static class CliApplication
             }
         }
 
-        options = new CliOptions(command, json, all, namesOnly, help, concurrency);
+        options = new CliOptions(
+            command,
+            json,
+            all,
+            namesOnly,
+            includeWindowEvidence,
+            help,
+            concurrency);
         return true;
     }
 
@@ -709,7 +792,7 @@ internal static class CliApplication
             Chromium Process Explorer
 
             Usage:
-              cpe [process-tree] [--json] [--all] [--concurrency N]
+              cpe [process-tree] [--json] [--all] [--windows] [--concurrency N]
               cpe mojo-pipes [--json] [--names-only] [--concurrency N]
               cpe installations [--json] [--concurrency N]
               cpe cdp [--json] [--concurrency N]
@@ -724,6 +807,7 @@ internal static class CliApplication
               --all            Include every process in the process tree.
               --json           Emit structured JSON.
               --names-only     Skip pipe endpoint handle inspection.
+              --windows        Add optional HWND topology and WebView2 evidence.
               --concurrency N  Bound parallel process metadata queries.
               -h, --help       Show this help.
             """);
@@ -734,6 +818,7 @@ internal static class CliApplication
         bool Json,
         bool AllProcesses,
         bool NamesOnly,
+        bool IncludeWindowEvidence,
         bool ShowHelp,
         int? MaximumConcurrency);
 

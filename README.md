@@ -17,9 +17,9 @@ The solution targets .NET 9 on Windows and contains:
 
 - **ChromiumProcessExplorer.Core** - reusable process discovery, Chromium
   command-line parsing, typed process-graph and generation-safe process-tree
-  construction, CEF runtime analysis, and Mojo pipe and installation
-  enumeration. The public APIs can be consumed by the CLI, a future GUI, or
-  other .NET applications.
+  construction, CEF and WebView2 runtime analysis, optional HWND topology, and
+  Mojo pipe and installation enumeration. The public APIs can be consumed by
+  the CLI, a future GUI, or other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
   parsing, Mojo pipe recognition, process-tree generation, and CEF runtime
@@ -82,6 +82,9 @@ dotnet run --project src\ChromiumProcessExplorer.Cli -- mojo-pipes --names-only
 
 # Show every process and bound process metadata enrichment.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- process-tree --all --concurrency 4
+
+# Add optional HWND topology for WebView2 host/browser association.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- process-tree --windows
 ```
 
 `mojo-pipes` duplicates candidate file handles into bounded helper processes. Queries
@@ -159,8 +162,11 @@ as:
 
 For CEF applications, the tree classifies browser and subprocess roles and can
 associate a browser with its native host when generation-safe ancestry and
-explicit command-line references corroborate the relationship. WebView2 and
-Electron need deeper platform-specific host-association adapters.
+explicit command-line references corroborate the relationship. For WebView2,
+loaded SDK/client modules classify hosts, while generation-safe ancestry,
+observed Mojo endpoints, and optional `--windows` HWND topology corroborate
+host-to-browser relationships. Electron still needs a platform-specific
+adapter.
 
 ### Runtime diagnostics
 
@@ -219,10 +225,11 @@ before sharing it.
 
 The process, Mojo endpoint, and initial installation discovery foundations are
 implemented. CEF process roles, deployment layouts, explicit runtime paths,
-wrapper markers, risky switches, loaded-module evidence, and confidence-scored
-browser/subprocess and host/browser associations are also exposed. HWND
-evidence, deeper platform-specific WebView2 and Electron adapters, logging
-diagnostics, packaging, and the GUI remain planned work.
+wrapper markers, risky switches, and confidence-scored browser/subprocess and
+host/browser associations are exposed. WebView2 loaded-module and optional
+generation-safe HWND evidence are also exposed without changing the strict OS
+parent tree. Deeper Electron support, logging diagnostics, packaging, and the
+GUI remain planned work.
 
 Open design investigations include:
 

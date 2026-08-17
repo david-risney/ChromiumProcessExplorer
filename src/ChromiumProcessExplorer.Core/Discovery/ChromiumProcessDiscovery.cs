@@ -7,6 +7,7 @@ public sealed class ChromiumProcessDiscovery
     private readonly IMojoPipeProvider _mojoPipeEnumerator;
     private readonly IInstallationProvider _installationProvider;
     private readonly ICdpEndpointProvider _cdpEndpointProvider;
+    private readonly IWindowSnapshotProvider _windowSnapshotProvider;
 
     /// <summary>Creates a discovery service using the built-in Windows providers.</summary>
     public ChromiumProcessDiscovery()
@@ -14,7 +15,8 @@ public sealed class ChromiumProcessDiscovery
             new WindowsProcessSnapshotter(),
             new WindowsMojoPipeEnumerator(),
             new WindowsInstallationProvider(),
-            new CdpEndpointProvider())
+            new CdpEndpointProvider(),
+            new WindowsWindowSnapshotProvider())
     {
     }
 
@@ -26,7 +28,8 @@ public sealed class ChromiumProcessDiscovery
             processSnapshotter,
             mojoPipeEnumerator,
             new WindowsInstallationProvider(),
-            new CdpEndpointProvider())
+            new CdpEndpointProvider(),
+            new WindowsWindowSnapshotProvider())
     {
     }
 
@@ -39,7 +42,8 @@ public sealed class ChromiumProcessDiscovery
             processSnapshotter,
             mojoPipeEnumerator,
             installationProvider,
-            new CdpEndpointProvider())
+            new CdpEndpointProvider(),
+            new WindowsWindowSnapshotProvider())
     {
     }
 
@@ -49,16 +53,34 @@ public sealed class ChromiumProcessDiscovery
         IMojoPipeProvider mojoPipeEnumerator,
         IInstallationProvider installationProvider,
         ICdpEndpointProvider cdpEndpointProvider)
+        : this(
+            processSnapshotter,
+            mojoPipeEnumerator,
+            installationProvider,
+            cdpEndpointProvider,
+            new WindowsWindowSnapshotProvider())
+    {
+    }
+
+    /// <summary>Creates a discovery service using custom providers.</summary>
+    public ChromiumProcessDiscovery(
+        IProcessSnapshotProvider processSnapshotter,
+        IMojoPipeProvider mojoPipeEnumerator,
+        IInstallationProvider installationProvider,
+        ICdpEndpointProvider cdpEndpointProvider,
+        IWindowSnapshotProvider windowSnapshotProvider)
     {
         ArgumentNullException.ThrowIfNull(processSnapshotter);
         ArgumentNullException.ThrowIfNull(mojoPipeEnumerator);
         ArgumentNullException.ThrowIfNull(installationProvider);
         ArgumentNullException.ThrowIfNull(cdpEndpointProvider);
+        ArgumentNullException.ThrowIfNull(windowSnapshotProvider);
 
         _processSnapshotter = processSnapshotter;
         _mojoPipeEnumerator = mojoPipeEnumerator;
         _installationProvider = installationProvider;
         _cdpEndpointProvider = cdpEndpointProvider;
+        _windowSnapshotProvider = windowSnapshotProvider;
     }
 
     /// <summary>
@@ -67,6 +89,22 @@ public sealed class ChromiumProcessDiscovery
     public async ValueTask<ChromiumDiscoveryResult> DiscoverAsync(
         HandleQueryWorkerOptions workerOptions,
         int? maximumProcessConcurrency = null,
+        CancellationToken cancellationToken = default)
+    {
+        return await DiscoverAsync(
+            workerOptions,
+            maximumProcessConcurrency,
+            false,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Captures processes and optionally includes native window topology.
+    /// </summary>
+    public async ValueTask<ChromiumDiscoveryResult> DiscoverAsync(
+        HandleQueryWorkerOptions workerOptions,
+        int? maximumProcessConcurrency,
+        bool includeWindowEvidence,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workerOptions);
@@ -87,11 +125,21 @@ public sealed class ChromiumProcessDiscovery
             processes,
             workerOptions,
             cancellationToken);
+        WindowSnapshotResult windowSnapshot = includeWindowEvidence
+            ? await _windowSnapshotProvider.CaptureAsync(
+                processes,
+                cancellationToken)
+            : WindowSnapshotResult.Empty;
+        WebView2RuntimeAnalysis webView2Runtime = WebView2RuntimeAdapter.Analyze(
+            processes,
+            inspection,
+            windowSnapshot);
         ProcessGraph graph = ProcessGraphBuilder.Build(
             processes,
             inspection,
             capturedAt,
-            cefRuntime);
+            cefRuntime,
+            webView2Runtime);
         ProcessTree tree = graph.CreateProcessTree();
         CdpDiscoveryResult cdp = await _cdpEndpointProvider.DiscoverAsync(
             processes,
@@ -104,9 +152,10 @@ public sealed class ChromiumProcessDiscovery
             graph,
             tree,
             inspection,
-            inspection.Issues)
+            inspection.Issues.Concat(webView2Runtime.Issues).ToArray())
         {
             CefRuntime = cefRuntime,
+            WebView2Runtime = webView2Runtime,
             Cdp = cdp,
         };
     }
@@ -240,6 +289,10 @@ public sealed record ChromiumDiscoveryResult(
 {
     /// <summary>Gets CEF-specific process and runtime analysis.</summary>
     public CefRuntimeAnalysis CefRuntime { get; init; } = CefRuntimeAnalysis.Empty;
+
+    /// <summary>Gets WebView2-specific process and host analysis.</summary>
+    public WebView2RuntimeAnalysis WebView2Runtime { get; init; } =
+        WebView2RuntimeAnalysis.Empty;
 
     /// <summary>Gets configured and validated CDP transports.</summary>
     public CdpDiscoveryResult Cdp { get; init; } = new(

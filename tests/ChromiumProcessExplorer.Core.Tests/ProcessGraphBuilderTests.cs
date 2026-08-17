@@ -168,6 +168,47 @@ public sealed class ProcessGraphBuilderTests
         Assert.Equal("True", embedded.Evidence.RawValues["isAuthoritative"]);
     }
 
+    [Fact]
+    public void BuildAddsWebView2HostEdgeWithoutChangingOsParentTree()
+    {
+        ProcessSnapshotEntry host = CreateProcess(20, 0, SnapshotTime);
+        ProcessSnapshotEntry browser = CreateProcess(21, 0, SnapshotTime.AddSeconds(1));
+        WebView2RuntimeAnalysis webView2 = new(
+            [],
+            [
+                new WebView2HostAssociation(
+                    20,
+                    21,
+                    90,
+                    ProcessRelationshipConfidence.High,
+                    true,
+                    [new WebView2Evidence("window-property", "Observed HWND link.")]),
+            ],
+            WindowSnapshotResult.Empty,
+            []);
+
+        ProcessGraph graph = ProcessGraphBuilder.Build(
+            [host, browser],
+            CreateInspection(),
+            SnapshotTime,
+            webView2Runtime: webView2);
+
+        Assert.Equal(2, graph.Edges.Count);
+        ProcessGraphEdge embedded = Assert.Single(
+            graph.Edges,
+            edge => edge.Type == ProcessRelationshipType.EmbeddedBy);
+        ProcessGraphEdge window = Assert.Single(
+            graph.Edges,
+            edge => edge.Type == ProcessRelationshipType.CrossProcessWindow);
+        Assert.Equal(ProcessRelationshipType.EmbeddedBy, embedded.Type);
+        Assert.Equal((20, 21), (
+            embedded.Source.ProcessId,
+            embedded.Target.ProcessId));
+        Assert.Equal("webview2-runtime-adapter", embedded.Evidence.Source);
+        Assert.Equal("windows-window-snapshot", window.Evidence.Source);
+        Assert.Equal(2, graph.CreateProcessTree().Roots.Count);
+    }
+
     private static NamedPipeConnection CreateConnection(
         int serverProcessId,
         int clientProcessId,
