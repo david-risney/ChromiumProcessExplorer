@@ -62,6 +62,7 @@ public sealed class ChromiumProcessDiscovery
 
         IReadOnlyList<ProcessSnapshotEntry> processes = await processTask;
         MojoPipeEnumerationResult pipeResult = await pipeTask;
+        CefRuntimeAnalysis cefRuntime = CefRuntimeAdapter.Analyze(processes);
         MojoPipeInspectionResult inspection = await InspectMojoPipesAsync(
             pipeResult,
             processes,
@@ -70,7 +71,8 @@ public sealed class ChromiumProcessDiscovery
         ProcessGraph graph = ProcessGraphBuilder.Build(
             processes,
             inspection,
-            capturedAt);
+            capturedAt,
+            cefRuntime);
         ProcessTree tree = graph.CreateProcessTree();
 
         return new ChromiumDiscoveryResult(
@@ -79,7 +81,10 @@ public sealed class ChromiumProcessDiscovery
             graph,
             tree,
             inspection,
-            inspection.Issues);
+            inspection.Issues)
+        {
+            CefRuntime = cefRuntime,
+        };
     }
 
     /// <summary>Enumerates Mojo pipes without performing process discovery.</summary>
@@ -189,4 +194,8 @@ public sealed record ChromiumDiscoveryResult(
     ProcessGraph ProcessGraph,
     ProcessTree ProcessTree,
     MojoPipeInspectionResult MojoPipeInspection,
-    IReadOnlyList<DiscoveryIssue> Issues);
+    IReadOnlyList<DiscoveryIssue> Issues)
+{
+    /// <summary>Gets CEF-specific process and runtime analysis.</summary>
+    public CefRuntimeAnalysis CefRuntime { get; init; } = CefRuntimeAnalysis.Empty;
+}

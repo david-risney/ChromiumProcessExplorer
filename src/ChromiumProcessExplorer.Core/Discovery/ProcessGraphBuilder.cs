@@ -10,7 +10,8 @@ public static class ProcessGraphBuilder
     public static ProcessGraph Build(
         IEnumerable<ProcessSnapshotEntry> processes,
         MojoPipeInspectionResult mojoInspection,
-        DateTimeOffset processObservedAt)
+        DateTimeOffset processObservedAt,
+        CefRuntimeAnalysis? cefRuntime = null)
     {
         ArgumentNullException.ThrowIfNull(processes);
         ArgumentNullException.ThrowIfNull(mojoInspection);
@@ -85,7 +86,76 @@ public static class ProcessGraphBuilder
             }
         }
 
+        foreach (CefProcessAssociation association in
+            cefRuntime?.Associations ?? [])
+        {
+            AddCefEdge(
+                association.BrowserProcessId,
+                association.SubprocessProcessId,
+                ProcessRelationshipType.ChromiumSubprocess,
+                association.Score,
+                association.Confidence,
+                association.IsAuthoritative,
+                association.Evidence);
+        }
+
+        foreach (CefHostAssociation association in
+            cefRuntime?.HostAssociations ?? [])
+        {
+            AddCefEdge(
+                association.HostProcessId,
+                association.BrowserProcessId,
+                ProcessRelationshipType.EmbeddedBy,
+                association.Score,
+                association.Confidence,
+                association.IsAuthoritative,
+                association.Evidence);
+        }
+
         return new ProcessGraph(processArray, edges);
+
+        void AddCefEdge(
+            int sourceProcessId,
+            int targetProcessId,
+            ProcessRelationshipType type,
+            int score,
+            CefAssociationConfidence confidence,
+            bool isAuthoritative,
+            IReadOnlyList<string> associationEvidence)
+        {
+            if (!TryGetCurrentProcess(
+                sourceProcessId,
+                out ProcessSnapshotEntry? source)
+                || !TryGetCurrentProcess(
+                    targetProcessId,
+                    out ProcessSnapshotEntry? target))
+            {
+                return;
+            }
+
+            edges.Add(new ProcessGraphEdge(
+                GetIdentity(source),
+                GetIdentity(target),
+                type,
+                new ProcessRelationshipEvidence(
+                    "cef-runtime-adapter",
+                    confidence switch
+                    {
+                        CefAssociationConfidence.High =>
+                            ProcessRelationshipConfidence.High,
+                        CefAssociationConfidence.Medium =>
+                            ProcessRelationshipConfidence.Medium,
+                        _ => ProcessRelationshipConfidence.Low,
+                    },
+                    processObservedAt,
+                    new Dictionary<string, string?>
+                    {
+                        ["score"] = score.ToString(CultureInfo.InvariantCulture),
+                        ["isAuthoritative"] = isAuthoritative.ToString(
+                            CultureInfo.InvariantCulture),
+                        ["evidence"] = string.Join(" ", associationEvidence),
+                    })));
+        }
 
         bool TryGetCurrentProcess(
             int processId,

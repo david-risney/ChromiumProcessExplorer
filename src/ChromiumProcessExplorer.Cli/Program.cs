@@ -353,11 +353,16 @@ internal static class CliApplication
         ProcessGraph graph = result.ProcessGraph;
         IReadOnlySet<int> mojoProcessIds =
             result.MojoPipeInspection.GetRelatedProcessIds();
+        IReadOnlyDictionary<int, CefProcessInfo> cefProcesses =
+            result.CefRuntime.Processes.ToDictionary(process => process.ProcessId);
         if (!options.AllProcesses)
         {
             HashSet<int> seeds = result.Processes
                 .Where(process => process.IsLikelyChromium)
                 .Select(process => process.ProcessId)
+                .Concat(result.CefRuntime.Processes.Select(process => process.ProcessId))
+                .Concat(result.CefRuntime.HostAssociations.Select(
+                    association => association.HostProcessId))
                 .Concat(mojoProcessIds)
                 .ToHashSet();
             tree = tree.CreateFilteredView(seeds);
@@ -371,6 +376,7 @@ internal static class CliApplication
                 {
                     result.CapturedAt,
                     Roots = tree.Roots.Select(ToSerializableNode),
+                    result.CefRuntime,
                     ProcessGraph = graph,
                     result.MojoPipeInspection,
                     result.Issues,
@@ -387,7 +393,46 @@ internal static class CliApplication
 
         foreach (ProcessTreeNode root in tree.Roots)
         {
-            WriteNode(root, string.Empty, true, mojoProcessIds);
+            WriteNode(
+                root,
+                string.Empty,
+                true,
+                mojoProcessIds,
+                cefProcesses);
+        }
+
+        if (result.CefRuntime.Associations.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("CEF process associations");
+            foreach (CefProcessAssociation association in result.CefRuntime.Associations)
+            {
+                string authority = association.IsAuthoritative
+                    ? "authoritative"
+                    : "inferred";
+                Console.WriteLine(
+                    $"  browser {association.BrowserProcessId} -> "
+                    + $"subprocess {association.SubprocessProcessId}: "
+                    + $"{association.Confidence} ({association.Score}/100, {authority})");
+            }
+        }
+
+        if (result.CefRuntime.HostAssociations.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("CEF host associations");
+            foreach (CefHostAssociation association in
+                result.CefRuntime.HostAssociations)
+            {
+                string authority = association.IsAuthoritative
+                    ? "authoritative"
+                    : "inferred";
+                Console.WriteLine(
+                    $"  host {association.HostProcessId} -> "
+                    + $"browser {association.BrowserProcessId}: "
+                    + $"{association.Confidence} "
+                    + $"({association.Score}/100, {authority})");
+            }
         }
 
         Console.WriteLine();
@@ -407,27 +452,121 @@ internal static class CliApplication
         ProcessTreeNode node,
         string prefix,
         bool isLast,
-        IReadOnlySet<int> mojoProcessIds)
+        IReadOnlySet<int> mojoProcessIds,
+        IReadOnlyDictionary<int, CefProcessInfo> cefProcesses)
     {
         ProcessSnapshotEntry process = node.Process;
+        _ = cefProcesses.TryGetValue(process.ProcessId, out CefProcessInfo? cef);
         string branch = isLast ? "`- " : "|- ";
         string type = process.ChromiumProcessType is null
             ? string.Empty
             : $" [{process.ChromiumProcessType}]";
         string mojo = mojoProcessIds.Contains(process.ProcessId) ? " [mojo]" : string.Empty;
+        string cefBadge = cef is null
+            ? string.Empty
+            : $" [CEF:{cef.Role}] [{cef.Layout}]";
         string path = process.ExecutablePath is null ? string.Empty : $" {process.ExecutablePath}";
 
         Console.WriteLine(
-            $"{prefix}{branch}{process.ProcessId} {process.ImageName}{type}{mojo}{path}");
+            $"{prefix}{branch}{process.ProcessId} {process.ImageName}"
+            + $"{type}{cefBadge}{mojo}{path}");
 
         string childPrefix = prefix + (isLast ? "   " : "|  ");
+        if (cef is not null)
+        {
+            WriteCefDetails(cef, process.CommandLine, childPrefix);
+        }
+
         for (int index = 0; index < node.Children.Count; index++)
         {
             WriteNode(
                 node.Children[index],
                 childPrefix,
                 index == node.Children.Count - 1,
-                mojoProcessIds);
+                mojoProcessIds,
+                cefProcesses);
+        }
+    }
+
+    private static void WriteCefDetails(
+        CefProcessInfo cef,
+        string? commandLine,
+        string prefix)
+    {
+        if (!string.IsNullOrWhiteSpace(commandLine))
+        {
+            Console.WriteLine($"{prefix}command: {commandLine}");
+        }
+
+        if (cef.UtilityRole is not null)
+        {
+            Console.WriteLine($"{prefix}utility sandbox: {cef.UtilityRole}");
+        }
+
+        if (cef.UtilitySubType is not null)
+        {
+            Console.WriteLine($"{prefix}utility subtype: {cef.UtilitySubType}");
+        }
+
+        if (cef.Wrappers.Count > 0)
+        {
+            Console.WriteLine($"{prefix}wrapper: {string.Join(", ", cef.Wrappers)}");
+        }
+
+        CefRuntimePaths paths = cef.RuntimePaths;
+        WriteCefPath(prefix, "user data", paths.UserDataDirectory);
+        WriteCefPath(prefix, "log", paths.LogFile);
+        WriteCefPath(prefix, "resources", paths.ResourcesDirectory);
+        WriteCefPath(prefix, "locales", paths.LocalesDirectory);
+        WriteCefPath(prefix, "browser subprocess", paths.BrowserSubprocessPath);
+        WriteCefPath(prefix, "crash reports", paths.CrashReportDirectory);
+        WriteCefPath(
+            prefix,
+            "crash reporter configuration",
+            paths.CrashReportConfigurationFile);
+        WriteCefPath(prefix, "DevTools active port", paths.DevToolsActivePortFile);
+
+        if (cef.RemoteDebuggingPort is not null)
+        {
+            Console.WriteLine(
+                $"{prefix}remote debugging port: {cef.RemoteDebuggingPort}");
+        }
+
+        if (cef.RemoteDebuggingPipe)
+        {
+            Console.WriteLine($"{prefix}remote debugging pipe: enabled");
+        }
+
+        foreach (CefSwitchWarning warning in cef.SwitchWarnings)
+        {
+            Console.WriteLine(
+                $"{prefix}warning: {warning.Switch} ({warning.Category}): "
+                + warning.Detail);
+        }
+
+        foreach (CefEvidence evidence in cef.Evidence.Where(
+            evidence => evidence.Source is "filesystem-marker" or "loaded-module"))
+        {
+            Console.WriteLine(
+                $"{prefix}cef evidence: {evidence.Source}: "
+                + $"{evidence.Path ?? evidence.Detail}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(cef.ModuleInspectionError))
+        {
+            Console.WriteLine(
+                $"{prefix}module inspection error: {cef.ModuleInspectionError}");
+        }
+    }
+
+    private static void WriteCefPath(
+        string prefix,
+        string label,
+        string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            Console.WriteLine($"{prefix}{label}: {path}");
         }
     }
 

@@ -17,11 +17,13 @@ The solution targets .NET 9 on Windows and contains:
 
 - **ChromiumProcessExplorer.Core** - reusable process discovery, Chromium
   command-line parsing, typed process-graph and generation-safe process-tree
-  construction, and Mojo pipe and installation enumeration. The public APIs can
-  be consumed by the CLI, a future GUI, or other .NET applications.
+  construction, CEF runtime analysis, and Mojo pipe and installation
+  enumeration. The public APIs can be consumed by the CLI, a future GUI, or
+  other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
-  parsing, Mojo pipe recognition, and process-tree generation.
+  parsing, Mojo pipe recognition, process-tree generation, and CEF runtime
+  analysis.
 
 Discovery takes one process snapshot, enriches process metadata with bounded
 parallelism, and validates parent relationships with process creation times
@@ -140,10 +142,10 @@ as:
 - Network service
 - Utility and other specialized subprocesses
 
-For WebView2 applications, the tree also associates browser processes with the
-native host application that owns them. The Electron and CEF process models
-require further investigation so equivalent relationships can be represented
-accurately.
+For CEF applications, the tree classifies browser and subprocess roles and can
+associate a browser with its native host when generation-safe ancestry and
+explicit command-line references corroborate the relationship. WebView2 and
+Electron need deeper platform-specific host-association adapters.
 
 ### Runtime diagnostics
 
@@ -201,13 +203,15 @@ before sharing it.
 ## Project status
 
 The process, Mojo endpoint, and initial installation discovery foundations are
-implemented. Loaded-module and HWND evidence, deeper platform-specific
-WebView2, Electron, and CEF adapters, logging diagnostics, packaging, and the
-GUI remain planned work.
+implemented. CEF process roles, deployment layouts, explicit runtime paths,
+wrapper markers, risky switches, loaded-module evidence, and confidence-scored
+browser/subprocess and host/browser associations are also exposed. HWND
+evidence, deeper platform-specific WebView2 and Electron adapters, logging
+diagnostics, packaging, and the GUI remain planned work.
 
 Open design investigations include:
 
-- Reliable host-to-browser association for Electron and CEF applications
+- Additional host-to-browser evidence for CEF and Electron applications
 - Administrative elevation for Copilot skill execution
 - Whether an elevated MCP server is the appropriate Copilot integration model
 - The exact compatibility scope with WebView2Utilities

@@ -112,6 +112,62 @@ public sealed class ProcessGraphBuilderTests
         Assert.Equal(3, tree.Roots.Count);
     }
 
+    [Fact]
+    public void BuildAddsCefSubprocessAndHostEdges()
+    {
+        ProcessSnapshotEntry host = CreateProcess(20, 0, SnapshotTime);
+        ProcessSnapshotEntry browser = CreateProcess(
+            21,
+            20,
+            SnapshotTime.AddSeconds(1));
+        ProcessSnapshotEntry renderer = CreateProcess(
+            22,
+            21,
+            SnapshotTime.AddSeconds(2));
+        CefRuntimeAnalysis cef = new(
+            [],
+            [
+                new CefProcessAssociation(
+                    21,
+                    22,
+                    85,
+                    CefAssociationConfidence.High,
+                    true,
+                    ["Generation-safe parent process relationship."]),
+            ],
+            [
+                new CefHostAssociation(
+                    20,
+                    21,
+                    100,
+                    CefAssociationConfidence.High,
+                    true,
+                    ["The browser command line references the host."]),
+            ]);
+
+        ProcessGraph graph = ProcessGraphBuilder.Build(
+            [host, browser, renderer],
+            CreateInspection(),
+            SnapshotTime,
+            cef);
+
+        ProcessGraphEdge subprocess = Assert.Single(
+            graph.Edges,
+            edge => edge.Type == ProcessRelationshipType.ChromiumSubprocess);
+        ProcessGraphEdge embedded = Assert.Single(
+            graph.Edges,
+            edge => edge.Type == ProcessRelationshipType.EmbeddedBy);
+
+        Assert.Equal((21, 22), (
+            subprocess.Source.ProcessId,
+            subprocess.Target.ProcessId));
+        Assert.Equal((20, 21), (
+            embedded.Source.ProcessId,
+            embedded.Target.ProcessId));
+        Assert.Equal("cef-runtime-adapter", embedded.Evidence.Source);
+        Assert.Equal("True", embedded.Evidence.RawValues["isAuthoritative"]);
+    }
+
     private static NamedPipeConnection CreateConnection(
         int serverProcessId,
         int clientProcessId,
