@@ -67,6 +67,12 @@ dotnet run --project src\ChromiumProcessExplorer.Cli -- mojo-pipes
 # Find browsers, WebView2 runtimes, and installed Chromium-based applications.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- installations
 
+# Discover configured CDP ports and private debugging-pipe transports.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- cdp
+
+# Emit validated CDP endpoints and unavailable/configured transport states.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- cdp --json
+
 # Emit installation records and their supporting evidence as JSON.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- installations --json
 
@@ -95,6 +101,13 @@ the same data in `TimedOutQueries`. Administrator access improves coverage.
 
 Records retain their evidence and report inaccessible or depth-limited
 directories rather than silently presenting the scan as complete.
+
+`cdp` parses remote-debugging switches on browser processes, resolves ephemeral
+ports through `DevToolsActivePort`, and validates loopback endpoints through a
+bounded `/json/version` request. A port is only labeled CDP when the response
+contains a matching loopback `webSocketDebuggerUrl`. Existing debugging pipes
+are reported as private, already-owned transports and are never read or
+written.
 
 ### Programmatic use
 
@@ -206,8 +219,9 @@ The process, Mojo endpoint, and initial installation discovery foundations are
 implemented. CEF process roles, deployment layouts, explicit runtime paths,
 wrapper markers, risky switches, loaded-module evidence, and confidence-scored
 browser/subprocess and host/browser associations are also exposed. HWND
-evidence, deeper platform-specific WebView2 and Electron adapters, logging
-diagnostics, packaging, and the GUI remain planned work.
+evidence, debugging-pipe controller correlation, deeper platform-specific
+WebView2 and Electron adapters, logging diagnostics, packaging, and the GUI
+remain planned work.
 
 Open design investigations include:
 

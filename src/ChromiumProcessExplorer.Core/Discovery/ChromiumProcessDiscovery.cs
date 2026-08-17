@@ -6,13 +6,15 @@ public sealed class ChromiumProcessDiscovery
     private readonly IProcessSnapshotProvider _processSnapshotter;
     private readonly IMojoPipeProvider _mojoPipeEnumerator;
     private readonly IInstallationProvider _installationProvider;
+    private readonly ICdpEndpointProvider _cdpEndpointProvider;
 
     /// <summary>Creates a discovery service using the built-in Windows providers.</summary>
     public ChromiumProcessDiscovery()
         : this(
             new WindowsProcessSnapshotter(),
             new WindowsMojoPipeEnumerator(),
-            new WindowsInstallationProvider())
+            new WindowsInstallationProvider(),
+            new CdpEndpointProvider())
     {
     }
 
@@ -23,7 +25,8 @@ public sealed class ChromiumProcessDiscovery
         : this(
             processSnapshotter,
             mojoPipeEnumerator,
-            new WindowsInstallationProvider())
+            new WindowsInstallationProvider(),
+            new CdpEndpointProvider())
     {
     }
 
@@ -32,14 +35,30 @@ public sealed class ChromiumProcessDiscovery
         IProcessSnapshotProvider processSnapshotter,
         IMojoPipeProvider mojoPipeEnumerator,
         IInstallationProvider installationProvider)
+        : this(
+            processSnapshotter,
+            mojoPipeEnumerator,
+            installationProvider,
+            new CdpEndpointProvider())
+    {
+    }
+
+    /// <summary>Creates a discovery service using custom providers.</summary>
+    public ChromiumProcessDiscovery(
+        IProcessSnapshotProvider processSnapshotter,
+        IMojoPipeProvider mojoPipeEnumerator,
+        IInstallationProvider installationProvider,
+        ICdpEndpointProvider cdpEndpointProvider)
     {
         ArgumentNullException.ThrowIfNull(processSnapshotter);
         ArgumentNullException.ThrowIfNull(mojoPipeEnumerator);
         ArgumentNullException.ThrowIfNull(installationProvider);
+        ArgumentNullException.ThrowIfNull(cdpEndpointProvider);
 
         _processSnapshotter = processSnapshotter;
         _mojoPipeEnumerator = mojoPipeEnumerator;
         _installationProvider = installationProvider;
+        _cdpEndpointProvider = cdpEndpointProvider;
     }
 
     /// <summary>
@@ -63,6 +82,8 @@ public sealed class ChromiumProcessDiscovery
         IReadOnlyList<ProcessSnapshotEntry> processes = await processTask;
         MojoPipeEnumerationResult pipeResult = await pipeTask;
         CefRuntimeAnalysis cefRuntime = CefRuntimeAdapter.Analyze(processes);
+        ValueTask<CdpDiscoveryResult> cdpTask =
+            _cdpEndpointProvider.DiscoverAsync(processes, cancellationToken);
         MojoPipeInspectionResult inspection = await InspectMojoPipesAsync(
             pipeResult,
             processes,
@@ -74,6 +95,7 @@ public sealed class ChromiumProcessDiscovery
             capturedAt,
             cefRuntime);
         ProcessTree tree = graph.CreateProcessTree();
+        CdpDiscoveryResult cdp = await cdpTask;
 
         return new ChromiumDiscoveryResult(
             capturedAt,
@@ -84,6 +106,7 @@ public sealed class ChromiumProcessDiscovery
             inspection.Issues)
         {
             CefRuntime = cefRuntime,
+            Cdp = cdp,
         };
     }
 
@@ -107,6 +130,20 @@ public sealed class ChromiumProcessDiscovery
                 maximumProcessConcurrency,
                 cancellationToken);
         return await _installationProvider.DiscoverAsync(
+            processes,
+            cancellationToken);
+    }
+
+    /// <summary>Discovers configured and validated CDP transports.</summary>
+    public async ValueTask<CdpDiscoveryResult> DiscoverCdpAsync(
+        int? maximumProcessConcurrency = null,
+        CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<ProcessSnapshotEntry> processes =
+            await _processSnapshotter.CaptureAsync(
+                maximumProcessConcurrency,
+                cancellationToken);
+        return await _cdpEndpointProvider.DiscoverAsync(
             processes,
             cancellationToken);
     }
@@ -198,4 +235,9 @@ public sealed record ChromiumDiscoveryResult(
 {
     /// <summary>Gets CEF-specific process and runtime analysis.</summary>
     public CefRuntimeAnalysis CefRuntime { get; init; } = CefRuntimeAnalysis.Empty;
+
+    /// <summary>Gets configured and validated CDP transports.</summary>
+    public CdpDiscoveryResult Cdp { get; init; } = new(
+        DateTimeOffset.MinValue,
+        []);
 }
