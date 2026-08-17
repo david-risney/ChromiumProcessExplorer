@@ -20,6 +20,18 @@ public static class CefRuntimeAdapter
         "resources.pak",
     ];
 
+    private static readonly HashSet<string> HostProcessIdSwitches =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "steampid",
+        };
+
+    private static readonly HashSet<string> HostExecutableSwitches =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "steampath",
+        };
+
     private static readonly Dictionary<string, string> WrapperMarkers =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -306,8 +318,9 @@ public static class CefRuntimeAdapter
             [
                 "Generation-safe parent process relationship.",
             ];
-            bool referencesHostProcessId = CommandLineReferencesValue(
+            bool referencesHostProcessId = CommandLineReferencesNamedValue(
                 browser.Process.CommandLine,
+                HostProcessIdSwitches,
                 host.Process.ProcessId.ToString(
                     System.Globalization.CultureInfo.InvariantCulture));
             if (referencesHostProcessId)
@@ -317,8 +330,9 @@ public static class CefRuntimeAdapter
                     "The browser command line explicitly references the host process ID.");
             }
 
-            bool referencesHostExecutable = CommandLineReferencesPath(
+            bool referencesHostExecutable = CommandLineReferencesNamedPath(
                 browser.Process.CommandLine,
+                HostExecutableSwitches,
                 host.Process.ExecutablePath);
             if (referencesHostExecutable)
             {
@@ -649,22 +663,26 @@ public static class CefRuntimeAdapter
                 : null;
     }
 
-    private static bool CommandLineReferencesValue(
+    private static bool CommandLineReferencesNamedValue(
         string? commandLine,
+        HashSet<string> switchNames,
         string expectedValue)
     {
         ChromiumCommandLine parsed = ChromiumCommandLine.Parse(commandLine);
         return parsed.Arguments
             .Skip(1)
-            .Select(GetArgumentValue)
-            .Any(value => string.Equals(
-                value,
-                expectedValue,
-                StringComparison.OrdinalIgnoreCase));
+            .Select(TrySplitNamedArgument)
+            .Any(argument => argument is not null
+                && switchNames.Contains(argument.Value.Name)
+                && string.Equals(
+                    argument.Value.Value,
+                    expectedValue,
+                    StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool CommandLineReferencesPath(
+    private static bool CommandLineReferencesNamedPath(
         string? commandLine,
+        HashSet<string> switchNames,
         string? expectedPath)
     {
         if (string.IsNullOrWhiteSpace(expectedPath))
@@ -675,14 +693,25 @@ public static class CefRuntimeAdapter
         ChromiumCommandLine parsed = ChromiumCommandLine.Parse(commandLine);
         return parsed.Arguments
             .Skip(1)
-            .Select(GetArgumentValue)
-            .Any(value => PathsEqual(value, expectedPath));
+            .Select(TrySplitNamedArgument)
+            .Any(argument => argument is not null
+                && switchNames.Contains(argument.Value.Name)
+                && PathsEqual(argument.Value.Value, expectedPath));
     }
 
-    private static string GetArgumentValue(string argument)
+    private static (string Name, string Value)? TrySplitNamedArgument(
+        string argument)
     {
         int separator = argument.IndexOf('=');
-        return separator < 0 ? argument : argument[(separator + 1)..];
+        if (separator <= 0)
+        {
+            return null;
+        }
+
+        string name = argument[..separator].TrimStart('-', '/');
+        return name.Length == 0
+            ? null
+            : (name, argument[(separator + 1)..]);
     }
 
     private static CefAssociationConfidence GetConfidence(int score)

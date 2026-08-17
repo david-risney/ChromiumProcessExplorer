@@ -512,6 +512,34 @@ public sealed class CefRuntimeAdapterTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeDoesNotUseUnrelatedSwitchValuesAsHostReferences()
+    {
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        string parentExecutable = @"C:\Apps\Parent\parent.exe";
+        ProcessSnapshotEntry parent = CreateProcess(
+            9222,
+            1,
+            start,
+            parentExecutable,
+            $"\"{parentExecutable}\"");
+        ProcessSnapshotEntry browser = CreateProcess(
+            130,
+            9222,
+            start.AddSeconds(1),
+            @"C:\Apps\Sample\sample.exe",
+            "\"C:\\Apps\\Sample\\sample.exe\" "
+                + "--remote-debugging-port=9222 "
+                + $"--log-file=\"{parentExecutable}\"") with
+        {
+            LoadedModules = [@"C:\Apps\Sample\libcef.dll"],
+        };
+
+        CefRuntimeAnalysis analysis = CefRuntimeAdapter.Analyze([parent, browser]);
+
+        Assert.Empty(analysis.HostAssociations);
+    }
+
+    [Fact]
     public void AnalyzeDoesNotPresentNumericLogHandleAsFilePath()
     {
         ProcessSnapshotEntry process = CreateProcess(
