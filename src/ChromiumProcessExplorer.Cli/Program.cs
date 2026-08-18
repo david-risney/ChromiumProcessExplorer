@@ -68,6 +68,18 @@ internal static class CliApplication
                 return 0;
             }
 
+            if (options.Command == "renderer-origins")
+            {
+                RendererEnrichmentResult enrichment =
+                    await discovery.DiscoverRendererEnrichmentAsync(
+                        workerOptions,
+                        includeTracing: options.IncludeTracing,
+                        maximumProcessConcurrency: options.MaximumConcurrency,
+                        cancellationToken: cancellation.Token);
+                WriteRendererEnrichment(enrichment, options.Json);
+                return 0;
+            }
+
             if (options.Command == "mojo-pipes")
             {
                 if (options.NamesOnly)
@@ -268,6 +280,43 @@ internal static class CliApplication
             {
                 Console.WriteLine($"  note: {transport.Error}");
             }
+        }
+    }
+
+    private static void WriteRendererEnrichment(
+        RendererEnrichmentResult result,
+        bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        foreach (DiscoveryIssue issue in result.Issues)
+        {
+            Console.Error.WriteLine($"warning: {issue.Stage}: {issue.Message}");
+        }
+
+        foreach (RendererFrameMapping mapping in result.FrameMappings)
+        {
+            string authority = mapping.IsAuthoritative
+                ? "authoritative"
+                : "experimental";
+            Console.WriteLine(
+                $"PID {mapping.Process.ProcessId} frame {mapping.FrameId}: "
+                + $"{mapping.Url}");
+            Console.WriteLine(
+                $"  {mapping.Source}, {mapping.Confidence}, {authority}; "
+                + mapping.Lifetime);
+        }
+
+        Console.WriteLine(
+            $"CDP topology: {result.CdpTargets.Count} targets and "
+            + $"{result.CdpProcesses.Count} OS processes.");
+        foreach (string limitation in result.Limitations)
+        {
+            Console.WriteLine($"  limitation: {limitation}");
         }
     }
 
@@ -816,6 +865,7 @@ internal static class CliApplication
         bool all = false;
         bool namesOnly = false;
         bool includeWindowEvidence = false;
+        bool includeTracing = false;
         bool help = false;
         int? concurrency = null;
         bool commandSeen = false;
@@ -828,6 +878,7 @@ internal static class CliApplication
                 case "mojo-pipes":
                 case "installations":
                 case "cdp":
+                case "renderer-origins":
                     if (commandSeen)
                     {
                         options = null!;
@@ -848,6 +899,9 @@ internal static class CliApplication
                     break;
                 case "--windows":
                     includeWindowEvidence = true;
+                    break;
+                case "--trace":
+                    includeTracing = true;
                     break;
                 case "--help":
                 case "-h":
@@ -876,6 +930,7 @@ internal static class CliApplication
             all,
             namesOnly,
             includeWindowEvidence,
+            includeTracing,
             help,
             concurrency);
         return true;
@@ -892,18 +947,22 @@ internal static class CliApplication
               cpe mojo-pipes [--json] [--names-only] [--concurrency N]
               cpe installations [--json] [--concurrency N]
               cpe cdp [--json] [--concurrency N]
+              cpe renderer-origins [--json] [--trace] [--concurrency N]
 
             Commands:
               process-tree  Show Chromium-related processes and their process ancestry.
               mojo-pipes    Inspect Mojo pipes and their server/client processes.
               installations Find Chromium browsers, runtimes, and applications.
               cdp           Discover configured and validated CDP transports.
+              renderer-origins
+                            Opt in to cooperative/CDP renderer-frame enrichment.
 
             Options:
               --all            Include every process in the process tree.
               --json           Emit structured JSON.
               --names-only     Skip pipe endpoint handle inspection.
               --windows        Add optional HWND topology and WebView2 evidence.
+              --trace          Add a bounded, version-sensitive CDP trace.
               --concurrency N  Bound parallel process metadata queries.
               -h, --help       Show this help.
             """);
@@ -915,6 +974,7 @@ internal static class CliApplication
         bool AllProcesses,
         bool NamesOnly,
         bool IncludeWindowEvidence,
+        bool IncludeTracing,
         bool ShowHelp,
         int? MaximumConcurrency);
 
