@@ -80,6 +80,18 @@ internal static class CliApplication
                 return 0;
             }
 
+            if (options.Command == "process-details")
+            {
+                ProcessDetailsResult details =
+                    await discovery.DiscoverProcessDetailsAsync(
+                        options.ProcessId,
+                        options.IncludeSensitiveValues,
+                        options.MaximumConcurrency,
+                        cancellation.Token);
+                WriteProcessDetails(details, options.Json);
+                return details.Processes.Count == 0 ? 1 : 0;
+            }
+
             if (options.Command == "mojo-pipes")
             {
                 if (options.NamesOnly)
@@ -318,6 +330,78 @@ internal static class CliApplication
         {
             Console.WriteLine($"  limitation: {limitation}");
         }
+    }
+
+    private static void WriteProcessDetails(
+        ProcessDetailsResult result,
+        bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        foreach (DiscoveryIssue issue in result.Issues)
+        {
+            Console.Error.WriteLine($"warning: {issue.Stage}: {issue.Message}");
+        }
+
+        foreach (ProcessDetailEntry process in result.Processes)
+        {
+            Console.WriteLine(
+                $"PID {process.Identity.ProcessId} {process.ImageName}");
+            Console.WriteLine(
+                $"  identity: {process.Identity.ProcessId}@"
+                + $"{process.Identity.CreationTime:O}");
+            Console.WriteLine($"  parent PID: {process.ParentProcessId}");
+            Console.WriteLine(
+                $"  executable: {FormatSensitive(process.ExecutablePath)}");
+            Console.WriteLine(
+                $"  command line: {FormatSensitive(process.CommandLine)}");
+            Console.WriteLine(
+                $"  role: {process.ChromiumProcessRole ?? "unknown"} "
+                + $"[{process.RoleSource}]");
+            Console.WriteLine(
+                $"  user data: {FormatSensitive(process.UserDataDirectory)}");
+            Console.WriteLine(
+                $"  architecture: {process.Architecture ?? "unknown"} "
+                + $"(native {process.NativeArchitecture ?? "unknown"})");
+            Console.WriteLine(
+                $"  integrity: {process.IntegrityLevel ?? "unknown"}, "
+                + $"elevated: {process.IsElevated?.ToString() ?? "unknown"}");
+            if (process.ExecutableVersion is not null)
+            {
+                Console.WriteLine(
+                    $"  version: file {process.ExecutableVersion.FileVersion ?? "unknown"}, "
+                    + $"product {process.ExecutableVersion.ProductVersion ?? "unknown"}");
+            }
+
+            if (process.PackageFullName is not null)
+            {
+                Console.WriteLine($"  package: {process.PackageFullName}");
+            }
+
+            foreach (ProcessSwitchDetail item in process.Switches)
+            {
+                Console.WriteLine(
+                    item.HasValue
+                        ? $"  switch: --{item.Name}={FormatSensitive(item.Value)}"
+                        : $"  switch: --{item.Name}");
+            }
+
+            foreach (DiscoveryIssue issue in process.Issues)
+            {
+                Console.Error.WriteLine(
+                    $"warning: PID {process.Identity.ProcessId} "
+                    + $"{issue.Stage}: {issue.Message}");
+            }
+        }
+    }
+
+    private static string FormatSensitive(SensitiveStringValue value)
+    {
+        return value.IsRedacted ? "<redacted>" : value.Value ?? "<unavailable>";
     }
 
     private static void WritePipes(MojoPipeInspectionResult result, bool json)
@@ -866,6 +950,8 @@ internal static class CliApplication
         bool namesOnly = false;
         bool includeWindowEvidence = false;
         bool includeTracing = false;
+        bool includeSensitiveValues = false;
+        int? processId = null;
         bool help = false;
         int? concurrency = null;
         bool commandSeen = false;
@@ -879,6 +965,7 @@ internal static class CliApplication
                 case "installations":
                 case "cdp":
                 case "renderer-origins":
+                case "process-details":
                     if (commandSeen)
                     {
                         options = null!;
@@ -902,6 +989,20 @@ internal static class CliApplication
                     break;
                 case "--trace":
                     includeTracing = true;
+                    break;
+                case "--include-sensitive":
+                    includeSensitiveValues = true;
+                    break;
+                case "--pid":
+                    if (++index >= args.Length
+                        || !int.TryParse(args[index], out int parsedProcessId)
+                        || parsedProcessId <= 0)
+                    {
+                        options = null!;
+                        return false;
+                    }
+
+                    processId = parsedProcessId;
                     break;
                 case "--help":
                 case "-h":
@@ -931,6 +1032,8 @@ internal static class CliApplication
             namesOnly,
             includeWindowEvidence,
             includeTracing,
+            includeSensitiveValues,
+            processId,
             help,
             concurrency);
         return true;
@@ -948,6 +1051,7 @@ internal static class CliApplication
               cpe installations [--json] [--concurrency N]
               cpe cdp [--json] [--concurrency N]
               cpe renderer-origins [--json] [--trace] [--concurrency N]
+              cpe process-details [--pid PID] [--json] [--include-sensitive] [--concurrency N]
 
             Commands:
               process-tree  Show Chromium-related processes and their process ancestry.
@@ -956,6 +1060,8 @@ internal static class CliApplication
               cdp           Discover configured and validated CDP transports.
               renderer-origins
                             Opt in to cooperative/CDP renderer-frame enrichment.
+              process-details
+                            Show detailed diagnostics for one PID or Chromium processes.
 
             Options:
               --all            Include every process in the process tree.
@@ -963,6 +1069,9 @@ internal static class CliApplication
               --names-only     Skip pipe endpoint handle inspection.
               --windows        Add optional HWND topology and WebView2 evidence.
               --trace          Add a bounded, version-sensitive CDP trace.
+              --pid PID        Select one process for process-details.
+              --include-sensitive
+                               Include paths, command lines, and switch values.
               --concurrency N  Bound parallel process metadata queries.
               -h, --help       Show this help.
             """);
@@ -975,6 +1084,8 @@ internal static class CliApplication
         bool NamesOnly,
         bool IncludeWindowEvidence,
         bool IncludeTracing,
+        bool IncludeSensitiveValues,
+        int? ProcessId,
         bool ShowHelp,
         int? MaximumConcurrency);
 

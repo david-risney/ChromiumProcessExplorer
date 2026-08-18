@@ -19,6 +19,9 @@ public sealed partial class ChromiumCommandLine
     /// <summary>Gets the arguments returned by Windows command-line parsing.</summary>
     public IReadOnlyList<string> Arguments { get; }
 
+    /// <summary>Gets parsed switch names and their unmodified values.</summary>
+    public IReadOnlyDictionary<string, string?> Switches => _switches;
+
     /// <summary>Parses a raw Windows process command line.</summary>
     public static ChromiumCommandLine Parse(string? commandLine)
     {
