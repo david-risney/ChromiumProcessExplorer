@@ -92,6 +92,17 @@ internal static class CliApplication
                 return details.Processes.Count == 0 ? 1 : 0;
             }
 
+            if (options.Command == "diagnostics")
+            {
+                DiagnosticArtifactDiscoveryResult diagnostics =
+                    await discovery.DiscoverDiagnosticArtifactsAsync(
+                        options.IncludeSensitiveValues,
+                        options.MaximumConcurrency,
+                        cancellation.Token);
+                WriteDiagnostics(diagnostics, options.Json);
+                return 0;
+            }
+
             if (options.Command == "mojo-pipes")
             {
                 if (options.NamesOnly)
@@ -402,6 +413,69 @@ internal static class CliApplication
     private static string FormatSensitive(SensitiveStringValue value)
     {
         return value.IsRedacted ? "<redacted>" : value.Value ?? "<unavailable>";
+    }
+
+    private static void WriteDiagnostics(
+        DiagnosticArtifactDiscoveryResult result,
+        bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return;
+        }
+
+        foreach (DiscoveryIssue issue in result.Issues)
+        {
+            Console.Error.WriteLine($"warning: {issue.Stage}: {issue.Message}");
+        }
+
+        foreach (DiagnosticConfigurationFinding finding in result.Configuration)
+        {
+            Console.WriteLine(
+                $"PID {finding.Identity.ProcessId} [{finding.Platform}] "
+                + $"{finding.Name} ({finding.Category}/{finding.Severity})");
+            if (finding.Value.Value is not null || finding.Value.IsRedacted)
+            {
+                Console.WriteLine(
+                    $"  value: {FormatSensitive(finding.Value)}");
+            }
+
+            Console.WriteLine($"  {finding.Detail}");
+            if (finding.RequiresExplicitConsent)
+            {
+                Console.WriteLine("  capture requires explicit consent");
+            }
+        }
+
+        foreach (DiagnosticArtifact artifact in result.Artifacts)
+        {
+            Console.WriteLine(
+                $"[{artifact.Platform}] {artifact.Kind}: "
+                + $"{FormatSensitive(artifact.Location)} "
+                + $"({artifact.Status})");
+            Console.WriteLine($"  source: {artifact.Source}");
+            if (artifact.Length is long length)
+            {
+                Console.WriteLine($"  size: {length} bytes");
+            }
+
+            if (artifact.LastWriteTime is DateTimeOffset lastWrite)
+            {
+                Console.WriteLine($"  last write: {lastWrite:O}");
+            }
+
+            if (artifact.ProcessIds.Count > 0)
+            {
+                Console.WriteLine(
+                    $"  PIDs: {string.Join(", ", artifact.ProcessIds)}");
+            }
+
+            if (artifact.IsPotentiallySensitive)
+            {
+                Console.WriteLine("  potentially sensitive");
+            }
+        }
     }
 
     private static void WritePipes(MojoPipeInspectionResult result, bool json)
@@ -966,6 +1040,7 @@ internal static class CliApplication
                 case "cdp":
                 case "renderer-origins":
                 case "process-details":
+                case "diagnostics":
                     if (commandSeen)
                     {
                         options = null!;
@@ -1052,6 +1127,7 @@ internal static class CliApplication
               cpe cdp [--json] [--concurrency N]
               cpe renderer-origins [--json] [--trace] [--concurrency N]
               cpe process-details [--pid PID] [--json] [--include-sensitive] [--concurrency N]
+              cpe diagnostics [--json] [--include-sensitive] [--concurrency N]
 
             Commands:
               process-tree  Show Chromium-related processes and their process ancestry.
@@ -1062,6 +1138,7 @@ internal static class CliApplication
                             Opt in to cooperative/CDP renderer-frame enrichment.
               process-details
                             Show detailed diagnostics for one PID or Chromium processes.
+              diagnostics   Passively discover logs, dumps, traces, and diagnostic settings.
 
             Options:
               --all            Include every process in the process tree.
