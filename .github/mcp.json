@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "chromium-process-explorer": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src\\ChromiumProcessExplorer.Mcp",
+        "--no-build",
+        "--"
+      ],
+      "tools": [
+        "cpe_probe",
+        "cpe_process_details",
+        "cpe_installations",
+        "cpe_diagnostics",
+        "cpe_cdp"
+      ]
+    }
+  }
+}

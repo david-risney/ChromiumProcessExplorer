@@ -23,6 +23,8 @@ public sealed class WindowsInstallationProviderTests : IDisposable
         ChromiumInstallation installation = Assert.Single(result.Installations);
         Assert.Equal("Application", installation.Kind);
         Assert.Equal("Electron", installation.Platform);
+        Assert.Equal("Portable", installation.Metadata.InstallType);
+        Assert.False(installation.Metadata.IsSharedRuntime);
         Assert.Equal(applicationPath, installation.InstallPath);
         Assert.Contains(
             installation.Evidence,
@@ -122,6 +124,269 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             evidence => evidence.Source == "running-process");
     }
 
+    [Fact]
+    public async Task DiscoverClassifiesRunningRenamedElectronExecutable()
+    {
+        string applicationPath = Path.Combine(_root, "RenamedElectron");
+        string resourcesPath = Path.Combine(applicationPath, "resources");
+        Directory.CreateDirectory(resourcesPath);
+        File.WriteAllText(Path.Combine(resourcesPath, "app.asar"), string.Empty);
+        string executablePath = Path.Combine(applicationPath, "sample.exe");
+        File.WriteAllText(executablePath, string.Empty);
+        ProcessSnapshotEntry process = new(
+            789,
+            1,
+            DateTimeOffset.UtcNow,
+            "sample.exe",
+            executablePath,
+            $"\"{executablePath}\" --type=renderer",
+            "renderer",
+            null,
+            true,
+            ["--type command-line switch"],
+            null);
+        WindowsInstallationProvider provider = new(
+            new WindowsInstallationDiscoveryOptions(
+                [],
+                includeKnownLocations: false));
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([process])).Installations);
+
+        Assert.Equal("Electron", installation.Platform);
+        Assert.Contains(
+            installation.Evidence,
+            evidence => evidence.Source == "electron-packaged-layout"
+                && evidence.Path?.EndsWith(
+                    Path.Combine("resources", "app.asar"),
+                    StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public async Task DiscoverMergesMsiRegistryAndFilesystemEvidence()
+    {
+        string applicationPath = Path.Combine(_root, "Chrome");
+        Directory.CreateDirectory(applicationPath);
+        string executablePath = Path.Combine(applicationPath, "chrome.exe");
+        WritePortableExecutable(executablePath, 0x8664);
+        File.WriteAllText(Path.Combine(applicationPath, "chrome_elf.dll"), string.Empty);
+        InstalledProgramRecord record = new(
+            "Google Chrome Beta",
+            "151.0.1",
+            "Google LLC",
+            applicationPath,
+            executablePath,
+            @"C:\InstallerCache",
+            "msiexec.exe /x {PRODUCT}",
+            true,
+            "Machine",
+            "Registry64",
+            @"HKLM\Uninstall\Chrome");
+        WindowsInstallationProvider provider = CreateProvider(
+            [record],
+            []);
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([])).Installations);
+
+        Assert.Equal("Chrome", installation.Platform);
+        Assert.Equal("MSI", installation.Metadata.InstallType);
+        Assert.Equal("x64", installation.Metadata.Architecture);
+        Assert.Equal("Google LLC", installation.Metadata.Publisher);
+        Assert.Equal("Beta", installation.Channel);
+        Assert.Equal("151.0.1", installation.Version);
+        Assert.Equal("Uninstall registry", installation.Metadata.VersionProvenance);
+        Assert.Contains(
+            installation.Evidence,
+            item => item.Source == "uninstall-registry");
+        Assert.Contains(
+            installation.Evidence,
+            item => item.Source == "filesystem-marker");
+    }
+
+    [Fact]
+    public async Task DiscoverClassifiesSquirrelAndNsisApplications()
+    {
+        string electronPath = Path.Combine(_root, "Slack");
+        string cefPath = Path.Combine(_root, "CefApp");
+        Directory.CreateDirectory(Path.Combine(electronPath, "resources"));
+        Directory.CreateDirectory(cefPath);
+        File.WriteAllText(
+            Path.Combine(electronPath, "resources", "app.asar"),
+            string.Empty);
+        string electronExe = Path.Combine(electronPath, "Slack.exe");
+        string cefExe = Path.Combine(cefPath, "CefApp.exe");
+        File.WriteAllText(electronExe, string.Empty);
+        File.WriteAllText(cefExe, string.Empty);
+        File.WriteAllText(Path.Combine(cefPath, "libcef.dll"), string.Empty);
+        InstalledProgramRecord[] records =
+        [
+            new(
+                "Slack",
+                "4.0",
+                "Slack Technologies",
+                electronPath,
+                electronExe,
+                null,
+                $"\"{Path.Combine(electronPath, "Update.exe")}\" --uninstall",
+                false,
+                "User",
+                "Registry64",
+                @"HKCU\Uninstall\Slack"),
+            new(
+                "CEF Sample",
+                "1.0",
+                "Contoso",
+                cefPath,
+                cefExe,
+                null,
+                $"\"{Path.Combine(cefPath, "unins000.exe")}\"",
+                false,
+                "Machine",
+                "Registry64",
+                @"HKLM\Uninstall\CefSample"),
+        ];
+        WindowsInstallationProvider provider = CreateProvider(records, []);
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        Assert.Contains(
+            result.Installations,
+            item => item.Platform == "Electron"
+                && item.Metadata.InstallType == "Squirrel"
+                && item.Channel is null);
+        Assert.Contains(
+            result.Installations,
+            item => item.Platform == "CEF"
+                && item.Metadata.InstallType == "NSIS");
+    }
+
+    [Fact]
+    public async Task DiscoverDoesNotTreatChromeRemoteDesktopAsBrowser()
+    {
+        string applicationPath = Path.Combine(_root, "RemoteDesktop");
+        Directory.CreateDirectory(applicationPath);
+        string executablePath = Path.Combine(applicationPath, "remoting_host.exe");
+        File.WriteAllText(executablePath, string.Empty);
+        InstalledProgramRecord record = new(
+            "Google Chrome Remote Desktop Host",
+            "1.0",
+            "Google LLC",
+            applicationPath,
+            executablePath,
+            null,
+            "uninstall.exe",
+            false,
+            "Machine",
+            "Registry64",
+            @"HKLM\Uninstall\ChromeRemoteDesktop");
+        WindowsInstallationProvider provider = CreateProvider([record], []);
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        Assert.Empty(result.Installations);
+    }
+
+    [Fact]
+    public async Task DiscoverAddsMsixPackageIdentity()
+    {
+        string packagePath = Path.Combine(
+            _root,
+            "Contoso.App_1.2.3.4_x64__publisher");
+        Directory.CreateDirectory(packagePath);
+        InstallationPackageIdentity identity = new(
+            Path.GetFileName(packagePath),
+            "Contoso.App_publisher",
+            "Contoso.App",
+            "1.2.3.4",
+            "x64",
+            "publisher");
+        WindowsPackageInstallation package = new(
+            "Contoso Electron App",
+            "Electron",
+            packagePath,
+            null,
+            identity,
+            "Contoso",
+            Path.Combine(packagePath, "resources"),
+            null,
+            false,
+            [new InstallationEvidence("windows-package", "Test package.", packagePath)]);
+        WindowsInstallationProvider provider = CreateProvider([], [package]);
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([])).Installations);
+
+        Assert.Equal("MSIX/AppX", installation.Metadata.InstallType);
+        Assert.Equal(identity, installation.Metadata.PackageIdentity);
+        Assert.Equal("x64", installation.Metadata.Architecture);
+        Assert.Equal("Package identity", installation.Metadata.VersionProvenance);
+        Assert.False(installation.Metadata.IsSharedRuntime);
+    }
+
+    [Fact]
+    public async Task DiscoverNormalizesDuplicateNestedRuntimeMarkers()
+    {
+        string applicationPath = Path.Combine(_root, "NestedApp");
+        string firstNative = Path.Combine(
+            applicationPath,
+            "runtimes",
+            "win-x64",
+            "native");
+        string secondNative = Path.Combine(
+            applicationPath,
+            "runtimes",
+            "win-x86",
+            "native");
+        Directory.CreateDirectory(firstNative);
+        Directory.CreateDirectory(secondNative);
+        File.WriteAllText(Path.Combine(applicationPath, "app.exe"), string.Empty);
+        File.WriteAllText(Path.Combine(firstNative, "WebView2Loader.dll"), string.Empty);
+        File.WriteAllText(Path.Combine(secondNative, "WebView2Loader.dll"), string.Empty);
+        WindowsInstallationProvider provider = CreateProvider();
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([])).Installations);
+
+        Assert.Equal(applicationPath, installation.InstallPath);
+        Assert.Equal("WebView2", installation.Platform);
+        Assert.Equal(
+            2,
+            installation.Evidence.Count(item => item.Source == "filesystem-marker"));
+    }
+
+    [Fact]
+    public async Task DiscoverIgnoresSdkMarkerWithoutApplicationExecutable()
+    {
+        string nativePath = Path.Combine(_root, "sdk", "runtimes", "win-x64", "native");
+        Directory.CreateDirectory(nativePath);
+        File.WriteAllText(Path.Combine(nativePath, "libcef.dll"), string.Empty);
+        WindowsInstallationProvider provider = CreateProvider();
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        Assert.Empty(result.Installations);
+        Assert.Equal(1, result.Statistics.MarkerFileCount);
+    }
+
+    [Fact]
+    public async Task DiscoverHonorsMaximumDirectoryCount()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "one", "two", "three"));
+        WindowsInstallationDiscoveryOptions options = new(
+            [_root],
+            includeKnownLocations: false)
+        {
+            MaximumDirectories = 2,
+        };
+        WindowsInstallationProvider provider = new(options);
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        Assert.Equal(2, result.Statistics.DirectoryCount);
+        Assert.True(result.Statistics.TruncatedDirectoryCount > 0);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
@@ -136,5 +401,57 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             new WindowsInstallationDiscoveryOptions(
                 [_root],
                 includeKnownLocations: false));
+    }
+
+    private WindowsInstallationProvider CreateProvider(
+        IReadOnlyList<InstalledProgramRecord> records,
+        IReadOnlyList<WindowsPackageInstallation> packages)
+    {
+        WindowsInstallationDiscoveryOptions options = new(
+            [_root],
+            includeKnownLocations: false)
+        {
+            IncludeRegistry = true,
+            IncludePackages = true,
+        };
+        return new WindowsInstallationProvider(
+            options,
+            new StubInstalledProgramProvider(records),
+            new StubPackageProvider(packages));
+    }
+
+    private static void WritePortableExecutable(string path, ushort machine)
+    {
+        byte[] bytes = new byte[256];
+        BitConverter.GetBytes((ushort)0x5A4D).CopyTo(bytes, 0);
+        BitConverter.GetBytes(128).CopyTo(bytes, 0x3C);
+        BitConverter.GetBytes(0x00004550u).CopyTo(bytes, 128);
+        BitConverter.GetBytes(machine).CopyTo(bytes, 132);
+        File.WriteAllBytes(path, bytes);
+    }
+
+    private sealed class StubInstalledProgramProvider(
+        IReadOnlyList<InstalledProgramRecord> records)
+        : IInstalledProgramProvider
+    {
+        public IReadOnlyList<InstalledProgramRecord> Discover(
+            ICollection<DiscoveryIssue> issues,
+            CancellationToken cancellationToken = default)
+        {
+            return records;
+        }
+    }
+
+    private sealed class StubPackageProvider(
+        IReadOnlyList<WindowsPackageInstallation> packages)
+        : IWindowsPackageInstallationProvider
+    {
+        public IReadOnlyList<WindowsPackageInstallation> Discover(
+            IReadOnlyList<ProcessSnapshotEntry> runningProcesses,
+            ICollection<DiscoveryIssue> issues,
+            CancellationToken cancellationToken = default)
+        {
+            return packages;
+        }
     }
 }

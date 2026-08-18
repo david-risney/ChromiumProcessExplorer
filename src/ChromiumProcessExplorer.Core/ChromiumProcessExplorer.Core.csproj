@@ -9,4 +9,8 @@
     <Description>Reusable discovery APIs for Chromium-based processes and installations on Windows.</Description>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="ChromiumProcessExplorer.Core.Tests" />
+  </ItemGroup>
+
 </Project>
