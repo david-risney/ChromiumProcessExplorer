@@ -136,13 +136,20 @@ public sealed class ChromiumProcessDiscovery
             processes,
             inspection,
             windowSnapshot);
+        AdditionalRuntimeAnalysis additionalRuntime =
+            AdditionalRuntimeAdapter.Analyze(
+                processes,
+                cefRuntime,
+                electronRuntime,
+                webView2Runtime);
         ProcessGraph graph = ProcessGraphBuilder.Build(
             processes,
             inspection,
             capturedAt,
             cefRuntime,
             webView2Runtime,
-            electronRuntime);
+            electronRuntime,
+            additionalRuntime);
         ProcessTree tree = graph.CreateProcessTree();
         CdpDiscoveryResult cdp = await _cdpEndpointProvider.DiscoverAsync(
             processes,
@@ -155,11 +162,15 @@ public sealed class ChromiumProcessDiscovery
             graph,
             tree,
             inspection,
-            inspection.Issues.Concat(webView2Runtime.Issues).ToArray())
+            inspection.Issues
+                .Concat(webView2Runtime.Issues)
+                .Concat(additionalRuntime.Issues)
+                .ToArray())
         {
             CefRuntime = cefRuntime,
             WebView2Runtime = webView2Runtime,
             ElectronRuntime = electronRuntime,
+            AdditionalRuntime = additionalRuntime,
             Cdp = cdp,
         };
     }
@@ -266,6 +277,11 @@ public sealed class ChromiumProcessDiscovery
                     TimeSpan.Zero),
                 [],
                 []));
+        AdditionalRuntimeAnalysis additional = AdditionalRuntimeAdapter.Analyze(
+            processes,
+            cef,
+            electron,
+            webView2);
         ProcessSnapshotEntry[] selected;
         List<DiscoveryIssue> selectionIssues = [];
         if (processId is int selectedProcessId)
@@ -289,13 +305,19 @@ public sealed class ChromiumProcessDiscovery
                 .Concat(cef.Processes.Select(process => process.ProcessId))
                 .Concat(electron.Processes.Select(process => process.ProcessId))
                 .Concat(webView2.Processes.Select(process => process.ProcessId))
+                .Concat(additional.Processes.Select(process => process.ProcessId))
                 .ToHashSet();
             selected = processes
                 .Where(process => included.Contains(process.ProcessId))
                 .ToArray();
         }
 
-        selected = ApplyRuntimeRoles(selected, cef, electron, webView2);
+        selected = ApplyRuntimeRoles(
+            selected,
+            cef,
+            electron,
+            webView2,
+            additional);
         ProcessDetailsResult result = new ProcessDetailsProvider().Create(
             selected,
             includeSensitiveValues);
@@ -328,7 +350,8 @@ public sealed class ChromiumProcessDiscovery
         IEnumerable<ProcessSnapshotEntry> processes,
         CefRuntimeAnalysis cef,
         ElectronRuntimeAnalysis electron,
-        WebView2RuntimeAnalysis webView2)
+        WebView2RuntimeAnalysis webView2,
+        AdditionalRuntimeAnalysis additional)
     {
         Dictionary<int, string> roles = [];
         foreach (ElectronProcessInfo process in electron.Processes)
@@ -350,6 +373,14 @@ public sealed class ChromiumProcessDiscovery
             roles.TryAdd(
                 process.ProcessId,
                 $"webview2-{process.Role.ToString().ToLowerInvariant()}");
+        }
+
+        foreach (AdditionalRuntimeProcessInfo process in additional.Processes)
+        {
+            roles.TryAdd(
+                process.ProcessId,
+                $"{process.PlatformId}-"
+                    + process.Role.ToString().ToLowerInvariant());
         }
 
         return processes.Select(process =>
@@ -465,6 +496,10 @@ public sealed record ChromiumDiscoveryResult(
     /// <summary>Gets Electron-specific process and runtime analysis.</summary>
     public ElectronRuntimeAnalysis ElectronRuntime { get; init; } =
         ElectronRuntimeAnalysis.Empty;
+
+    /// <summary>Gets Qt WebEngine, NW.js, PWA, and generic runtime analysis.</summary>
+    public AdditionalRuntimeAnalysis AdditionalRuntime { get; init; } =
+        AdditionalRuntimeAnalysis.Empty;
 
     /// <summary>Gets configured and validated CDP transports.</summary>
     public CdpDiscoveryResult Cdp { get; init; } = new(

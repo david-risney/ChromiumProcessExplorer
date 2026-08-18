@@ -16,9 +16,10 @@ The solution targets .NET 9 on Windows and contains:
 
 - **ChromiumProcessExplorer.Core** - reusable process discovery, Chromium
   command-line parsing, typed process-graph and generation-safe process-tree
-  construction, CEF, WebView2, and Electron runtime analysis, optional HWND
-  topology, and Mojo pipe and installation enumeration. The public APIs can be
-  consumed by the CLI, GUI, or other .NET applications.
+  construction, CEF, WebView2, Electron, Qt WebEngine, NW.js, and
+  browser-installed app runtime analysis, optional HWND topology, and Mojo
+  pipe and installation enumeration. The public APIs can be consumed by the
+  CLI, GUI, or other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
 - **ChromiumProcessExplorer** - a WPF frontend for process graph/tree,
   process details, Mojo/CDP evidence, installations, issues, and JSON export.
@@ -125,11 +126,14 @@ separately with evidence and confidence, and exposes process details, Mojo,
 CDP, installations, partial-coverage issues, broker status, cancellation, and
 JSON export. All discovery is performed through public Core APIs.
 
-`installations` combines five evidence sources:
+`installations` combines six evidence sources:
 
 - well-known Chromium browser and WebView2 runtime locations;
 - per-machine and per-user uninstall registrations from both registry views;
 - accessible MSIX/AppX package roots and WindowsApps identity;
+- Chrome, Edge, Brave, and Chromium profile app directories, Start-menu
+  shortcuts, and current-user file/protocol registrations containing
+  `--app-id`;
 - bounded scans of Program Files and per-user application folders for markers
   such as `libcef.dll`, `WebView2Loader.dll`, `app.asar`, `nw.dll`, and Qt
   WebEngine libraries; and
@@ -140,7 +144,9 @@ directories rather than silently presenting the scan as complete. Metadata
 includes install type (MSI, Squirrel, NSIS, MSIX/AppX, known location, or
 portable), publisher, package identity, PE/package architecture, version
 provenance, resources/runtime paths, confidence, and shared-versus-app-local
-runtime evidence. Nested dependency/SDK markers are normalized to an
+runtime evidence. Browser-managed apps retain their app ID, browser family,
+profile, and shared-runtime relationship rather than being presented as
+bundled Chromium installations. Nested dependency/SDK markers are normalized to an
 application executable root when possible and are not promoted to standalone
 applications without application evidence. Explicit search roots and maximum
 depth remain configurable, and scans stop after 50,000 directories by default;
@@ -230,6 +236,10 @@ The tool is designed with specific knowledge of:
 - WebView2-based applications
 - Electron-based applications
 - Chromium Embedded Framework (CEF) applications
+- Qt WebEngine applications
+- NW.js applications
+- Browser-installed apps and PWAs
+- Corroborated generic Chromium embedders
 
 ## Planned capabilities
 
@@ -255,6 +265,13 @@ detected from `resources\app.asar` or loose application metadata; main,
 renderer, DevTools, GPU, utility, worker, service-worker, Crashpad, and Node
 helper roles retain their raw taxonomies and confidence-scored associations.
 Cooperative app-side process data can override passive role inference.
+Qt WebEngine and NW.js detection combines helper/runtime names, loaded modules,
+filesystem markers, Chromium switches, generation-safe ancestry, executable
+directories, and user-data paths. Browser app mode is identified by `--app-id`
+or `--app`, then propagated through generation-safe Chromium subprocess
+ancestry. A generic Chromium fallback requires at least two corroborating
+signals, while known Sciter and Ultralight modules are explicitly excluded and
+existing WebView2/Electron/CEF classifications take precedence.
 
 ### Runtime diagnostics
 

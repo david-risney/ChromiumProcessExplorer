@@ -28,7 +28,10 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
             "electron.exe",
             "msedge.exe",
             "msedgewebview2.exe",
+            "nw.exe",
             "opera.exe",
+            "QtWebEngineProcess.exe",
+            "QtWebEngineProcessd.exe",
             "vivaldi.exe",
         };
 

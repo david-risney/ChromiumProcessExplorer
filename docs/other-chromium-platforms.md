@@ -8,6 +8,22 @@ Most language-specific CEF wrappers do **not** need separate engine detectors; t
 WebView2 integrations such as WPF, WinForms, WinUI 2/3, .NET MAUI, MAUI Blazor Hybrid, and Office Add-ins should generally stay under a single `webview2` runtime family, with optional **host-framework annotations**, because the Chromium-side process tree is still WebView2-based. Tauri is the most important **false-positive guard**: on Windows it uses **WebView2**, not a bundled Chromium runtime. Sciter and Ultralight are **not Chromium-based**; GeckoView is **Gecko** and Android-only; WKWebView is **WebKit** and Apple-only.  
 For vendor-specific “Steam/Spotify-style” desktop clients, the safer design is a **generic `cef` or `chromium-generic` classification with evidence scoring** unless product-specific artifacts are verified locally.
 
+## Implementation status
+
+Core implements the recommended Windows baseline:
+
+- `qt-webengine` and `nwjs` process/install detection from executable, module,
+  command-line, layout, ancestry, executable-directory, and user-data evidence;
+- `browser-pwa` process classification plus browser-profile, shortcut, and
+  current-user registration discovery with shared-browser metadata;
+- `chromium-generic` only when at least two signals corroborate the fallback;
+- CEF wrapper annotations, WebView2/Electron/CEF precedence, and explicit
+  Sciter/Ultralight exclusions; and
+- typed graph edges and CLI/GUI JSON exposure for the resulting associations.
+
+Detection remains evidence-based: missing access produces partial coverage,
+and inferred associations are not presented as authoritative runtime APIs.
+
 ### Legend
 
 - **Verified fingerprint** = directly documented in a primary source below.

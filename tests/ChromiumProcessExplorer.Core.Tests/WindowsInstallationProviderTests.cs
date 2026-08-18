@@ -57,6 +57,33 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task DiscoverUsesNormalizedQtAndNwJsPlatformIds()
+    {
+        string qtPath = Path.Combine(_root, "QtApp");
+        string nwPath = Path.Combine(_root, "NwApp");
+        Directory.CreateDirectory(qtPath);
+        Directory.CreateDirectory(nwPath);
+        File.WriteAllText(Path.Combine(qtPath, "sample.exe"), string.Empty);
+        File.WriteAllText(
+            Path.Combine(qtPath, "Qt6WebEngineCore.dll"),
+            string.Empty);
+        File.WriteAllText(Path.Combine(nwPath, "sample.exe"), string.Empty);
+        File.WriteAllText(Path.Combine(nwPath, "nw.dll"), string.Empty);
+        WindowsInstallationProvider provider = CreateProvider();
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        Assert.Contains(
+            result.Installations,
+            installation => installation.InstallPath == qtPath
+                && installation.Platform == RuntimePlatformIds.QtWebEngine);
+        Assert.Contains(
+            result.Installations,
+            installation => installation.InstallPath == nwPath
+                && installation.Platform == RuntimePlatformIds.Nwjs);
+    }
+
+    [Fact]
     public async Task DiscoverAddsRunningProcessInstallationOutsideSearchRoots()
     {
         Directory.CreateDirectory(_root);
@@ -370,6 +397,57 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task DiscoverAddsBrowserManagedAppsAsSharedRuntimeInstallations()
+    {
+        string browserPath = Path.Combine(_root, "Browser", "msedge.exe");
+        string appPath = Path.Combine(
+            _root,
+            "Profile",
+            "Web Applications",
+            "_crx_abcdefghijklmnopabcdefghijklmnop");
+        Directory.CreateDirectory(Path.GetDirectoryName(browserPath)!);
+        Directory.CreateDirectory(appPath);
+        File.WriteAllText(browserPath, string.Empty);
+        BrowserManagedAppInstallation app = new(
+            "abcdefghijklmnopabcdefghijklmnop",
+            "Sample PWA",
+            "edge",
+            browserPath,
+            "Default",
+            Path.GetDirectoryName(Path.GetDirectoryName(appPath)),
+            appPath,
+            [
+                new InstallationEvidence(
+                    "browser-profile-web-application",
+                    "Found app in browser profile.",
+                    appPath),
+            ]);
+        WindowsInstallationProvider provider = new(
+            new WindowsInstallationDiscoveryOptions(
+                [],
+                includeKnownLocations: false)
+            {
+                IncludeBrowserManagedApps = true,
+            },
+            new StubInstalledProgramProvider([]),
+            new StubPackageProvider([]),
+            new StubBrowserManagedAppProvider([app]));
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([])).Installations);
+
+        Assert.Equal("BrowserApp", installation.Kind);
+        Assert.Equal(RuntimePlatformIds.BrowserPwa, installation.Platform);
+        Assert.Equal(browserPath, installation.ExecutablePath);
+        Assert.True(installation.Metadata.IsSharedRuntime);
+        Assert.Equal("edge", installation.Metadata.BrowserPlatform);
+        Assert.Equal(
+            "abcdefghijklmnopabcdefghijklmnop",
+            installation.Metadata.ApplicationId);
+        Assert.Equal("Default", installation.Metadata.BrowserProfileName);
+    }
+
+    [Fact]
     public async Task DiscoverHonorsMaximumDirectoryCount()
     {
         Directory.CreateDirectory(Path.Combine(_root, "one", "two", "three"));
@@ -452,6 +530,18 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             return packages;
+        }
+    }
+
+    private sealed class StubBrowserManagedAppProvider(
+        IReadOnlyList<BrowserManagedAppInstallation> apps)
+        : IBrowserManagedAppProvider
+    {
+        public IReadOnlyList<BrowserManagedAppInstallation> Discover(
+            ICollection<DiscoveryIssue> issues,
+            CancellationToken cancellationToken = default)
+        {
+            return apps;
         }
     }
 }

@@ -301,6 +301,14 @@ internal static class CliApplication
                         $"    package: {metadata.PackageIdentity.PackageFullName}");
                 }
 
+                if (metadata.ApplicationId is not null)
+                {
+                    Console.WriteLine(
+                        $"    browser app: {metadata.ApplicationId}; "
+                        + $"browser: {metadata.BrowserPlatform ?? "unknown"}; "
+                        + $"profile: {metadata.BrowserProfileName ?? "unknown"}");
+                }
+
                 if (metadata.ResourcesPath is not null)
                 {
                     Console.WriteLine(
@@ -744,6 +752,9 @@ internal static class CliApplication
         IReadOnlyDictionary<int, ElectronProcessInfo> electronProcesses =
             result.ElectronRuntime.Processes.ToDictionary(
                 process => process.ProcessId);
+        IReadOnlyDictionary<int, AdditionalRuntimeProcessInfo> additionalProcesses =
+            result.AdditionalRuntime.Processes.ToDictionary(
+                process => process.ProcessId);
         if (!options.AllProcesses)
         {
             HashSet<int> seeds = result.Processes
@@ -757,6 +768,8 @@ internal static class CliApplication
                 .Concat(result.WebView2Runtime.HostAssociations.Select(
                     association => association.HostProcessId))
                 .Concat(result.ElectronRuntime.Processes.Select(
+                    process => process.ProcessId))
+                .Concat(result.AdditionalRuntime.Processes.Select(
                     process => process.ProcessId))
                 .Concat(result.Cdp.Transports.Select(transport => transport.ProcessId))
                 .Concat(mojoProcessIds)
@@ -775,6 +788,7 @@ internal static class CliApplication
                     result.CefRuntime,
                     result.WebView2Runtime,
                     result.ElectronRuntime,
+                    result.AdditionalRuntime,
                     result.Cdp,
                     ProcessGraph = graph,
                     result.MojoPipeInspection,
@@ -799,7 +813,8 @@ internal static class CliApplication
                 mojoProcessIds,
                 cefProcesses,
                 webView2Processes,
-                electronProcesses);
+                electronProcesses,
+                additionalProcesses);
         }
 
         if (result.CefRuntime.Associations.Count > 0)
@@ -878,6 +893,27 @@ internal static class CliApplication
             }
         }
 
+        if (result.AdditionalRuntime.Associations.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Additional Chromium runtime associations");
+            foreach (AdditionalRuntimeAssociation association in
+                result.AdditionalRuntime.Associations)
+            {
+                Console.WriteLine(
+                    $"  {association.PlatformId} "
+                    + $"{association.SourceProcessId} -> "
+                    + $"{association.TargetProcessId}: "
+                    + $"{association.Confidence} ({association.Score}/100)");
+            }
+        }
+
+        foreach (RuntimeExclusion exclusion in result.AdditionalRuntime.Exclusions)
+        {
+            Console.WriteLine(
+                $"Excluded {exclusion.ProcessId}: {exclusion.PlatformId}");
+        }
+
         foreach (DiscoveryIssue issue in result.WebView2Runtime.Issues)
         {
             Console.Error.WriteLine(
@@ -904,7 +940,8 @@ internal static class CliApplication
         IReadOnlySet<int> mojoProcessIds,
         IReadOnlyDictionary<int, CefProcessInfo> cefProcesses,
         IReadOnlyDictionary<int, WebView2ProcessInfo> webView2Processes,
-        IReadOnlyDictionary<int, ElectronProcessInfo> electronProcesses)
+        IReadOnlyDictionary<int, ElectronProcessInfo> electronProcesses,
+        IReadOnlyDictionary<int, AdditionalRuntimeProcessInfo> additionalProcesses)
     {
         ProcessSnapshotEntry process = node.Process;
         _ = cefProcesses.TryGetValue(process.ProcessId, out CefProcessInfo? cef);
@@ -914,6 +951,9 @@ internal static class CliApplication
         _ = electronProcesses.TryGetValue(
             process.ProcessId,
             out ElectronProcessInfo? electron);
+        _ = additionalProcesses.TryGetValue(
+            process.ProcessId,
+            out AdditionalRuntimeProcessInfo? additional);
         string branch = isLast ? "`- " : "|- ";
         string type = process.ChromiumProcessType is null
             ? string.Empty
@@ -928,11 +968,15 @@ internal static class CliApplication
         string electronBadge = electron is null
             ? string.Empty
             : $" [Electron:{electron.Role}]";
+        string additionalBadge = additional is null
+            ? string.Empty
+            : $" [{additional.PlatformId}:{additional.Role}]";
         string path = process.ExecutablePath is null ? string.Empty : $" {process.ExecutablePath}";
 
         Console.WriteLine(
             $"{prefix}{branch}{process.ProcessId} {process.ImageName}"
-            + $"{type}{cefBadge}{webView2Badge}{electronBadge}{mojo}{path}");
+            + $"{type}{cefBadge}{webView2Badge}{electronBadge}"
+            + $"{additionalBadge}{mojo}{path}");
 
         string childPrefix = prefix + (isLast ? "   " : "|  ");
         if (cef is not null)
@@ -950,6 +994,15 @@ internal static class CliApplication
             WriteElectronDetails(electron, childPrefix);
         }
 
+        if (additional is not null)
+        {
+            foreach (string annotation in additional.Annotations)
+            {
+                Console.WriteLine(
+                    $"{childPrefix}{additional.PlatformId}: {annotation}");
+            }
+        }
+
         for (int index = 0; index < node.Children.Count; index++)
         {
             WriteNode(
@@ -959,7 +1012,8 @@ internal static class CliApplication
                 mojoProcessIds,
                 cefProcesses,
                 webView2Processes,
-                electronProcesses);
+                electronProcesses,
+                additionalProcesses);
         }
     }
 
