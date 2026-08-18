@@ -1,0 +1,5 @@
+<Project>
+  <ItemGroup>
+    <AssemblyMetadata Include="ProductVersion" Value="$(Version)" />
+  </ItemGroup>
+</Project>
