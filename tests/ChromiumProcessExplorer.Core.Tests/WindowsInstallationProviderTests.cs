@@ -262,6 +262,32 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task DiscoverDoesNotTreatChromeRemoteDesktopAsBrowser()
+    {
+        string applicationPath = Path.Combine(_root, "RemoteDesktop");
+        Directory.CreateDirectory(applicationPath);
+        string executablePath = Path.Combine(applicationPath, "remoting_host.exe");
+        File.WriteAllText(executablePath, string.Empty);
+        InstalledProgramRecord record = new(
+            "Google Chrome Remote Desktop Host",
+            "1.0",
+            "Google LLC",
+            applicationPath,
+            executablePath,
+            null,
+            "uninstall.exe",
+            false,
+            "Machine",
+            "Registry64",
+            @"HKLM\Uninstall\ChromeRemoteDesktop");
+        WindowsInstallationProvider provider = CreateProvider([record], []);
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        Assert.Empty(result.Installations);
+    }
+
+    [Fact]
     public async Task DiscoverAddsMsixPackageIdentity()
     {
         string packagePath = Path.Combine(

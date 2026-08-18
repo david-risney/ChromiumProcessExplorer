@@ -856,27 +856,18 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         out (string Kind, string Platform, string Name) identity)
     {
         string name = record.DisplayName;
-        if (name.Contains("WebView2", StringComparison.OrdinalIgnoreCase))
+        if (name.Contains(
+            "WebView2 Runtime",
+            StringComparison.OrdinalIgnoreCase))
         {
             identity = ("Runtime", "WebView2", name);
             return true;
         }
 
-        foreach ((string marker, string platform) in new[]
+        if (TryClassifyKnownBrowserName(name, out string browserPlatform))
         {
-            ("Google Chrome", "Chrome"),
-            ("Microsoft Edge", "Edge"),
-            ("Brave", "Brave"),
-            ("Vivaldi", "Vivaldi"),
-            ("Opera", "Opera"),
-            ("Chromium", "Chromium"),
-        })
-        {
-            if (name.Contains(marker, StringComparison.OrdinalIgnoreCase))
-            {
-                identity = ("Browser", platform, name);
-                return true;
-            }
+            identity = ("Browser", browserPlatform, name);
+            return true;
         }
 
         if (executablePath is not null)
@@ -910,6 +901,37 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         }
 
         identity = default;
+        return false;
+    }
+
+    private static bool TryClassifyKnownBrowserName(
+        string displayName,
+        out string platform)
+    {
+        foreach ((string BaseName, string Platform, string[] Channels) candidate
+            in new[]
+            {
+                ("Google Chrome", "Chrome", new[] { "Beta", "Dev", "Canary" }),
+                ("Microsoft Edge", "Edge", new[] { "Beta", "Dev", "Canary", "Internal" }),
+                ("Brave", "Brave", new[] { "Beta", "Nightly" }),
+                ("Vivaldi", "Vivaldi", Array.Empty<string>()),
+                ("Opera", "Opera", new[] { "Stable", "beta", "developer", "GX" }),
+                ("Chromium", "Chromium", Array.Empty<string>()),
+            })
+        {
+            if (displayName.Equals(
+                    candidate.BaseName,
+                    StringComparison.OrdinalIgnoreCase)
+                || candidate.Channels.Any(channel => displayName.Equals(
+                    $"{candidate.BaseName} {channel}",
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                platform = candidate.Platform;
+                return true;
+            }
+        }
+
+        platform = null!;
         return false;
     }
 
@@ -1334,7 +1356,9 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             _publisher ??= record.Publisher;
             SetInstallIdentity(
                 GetInstallType(record),
-                record.InstallSource ?? record.RegistryPath);
+                string.IsNullOrWhiteSpace(record.InstallSource)
+                    ? record.RegistryPath
+                    : record.InstallSource);
             RaiseConfidence("High");
         }
 
@@ -1478,7 +1502,8 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             return installType switch
             {
                 "MSIX/AppX" => 100,
-                "MSI" or "Squirrel" or "NSIS" or "Registry" => 90,
+                "MSI" or "Squirrel" or "NSIS" => 95,
+                "Registry" => 90,
                 "KnownLocation" => 70,
                 "Portable" => 40,
                 _ => 0,

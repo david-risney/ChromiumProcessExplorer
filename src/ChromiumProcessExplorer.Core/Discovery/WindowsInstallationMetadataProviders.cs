@@ -96,7 +96,8 @@ public sealed class WindowsInstalledProgramProvider : IInstalledProgramProvider
         return records
             .DistinctBy(
                 record =>
-                    $"{record.RegistryPath}\0{record.InstallLocation}\0{record.DisplayVersion}",
+                    $"{record.RegistryView}\0{record.RegistryPath}\0"
+                    + $"{record.InstallLocation}\0{record.DisplayVersion}",
                 StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
@@ -484,7 +485,7 @@ public sealed partial class WindowsPackageInstallationProvider
         bool? IsSharedRuntime);
 
     [GeneratedRegex(
-        @"^(?<name>.+)_(?<version>\d+\.\d+\.\d+\.\d+)_(?<architecture>x64|x86|arm64|neutral)_(?<resource>[^_]*)_(?<publisher>[^_]+)$",
+        @"^(?<name>.+)_(?<version>\d+\.\d+\.\d+\.\d+)_(?<architecture>x64|x86|arm|arm64|neutral)_(?<resource>[^_]*)_(?<publisher>[^_]+)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex PackageFolderRegex();
 }
