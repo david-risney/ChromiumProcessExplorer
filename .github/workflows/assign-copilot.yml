@@ -1,0 +1,74 @@
+name: Assign Copilot to ready issues
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: copilot-ready-issue-assignment
+  cancel-in-progress: false
+
+jobs:
+  assign-copilot:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'copilot-ready'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Assign next ready issue
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.COPILOT_ASSIGNMENT_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::COPILOT_ASSIGNMENT_TOKEN is not configured"
+            exit 1
+          fi
+
+          ready_issue_numbers="${RUNNER_TEMP}/copilot-ready-issue-numbers.txt"
+          gh api --paginate \
+            "/repos/${REPOSITORY}/issues?state=open&labels=copilot-ready&per_page=100" \
+            --jq '
+              .[]
+              | select(has("pull_request") | not)
+              | select(all(
+                  .assignees[]?;
+                  .login != "copilot-swe-agent[bot]"
+                  and .login != "copilot-swe-agent"
+                  and .login != "copilot"
+                ))
+              | .number
+            ' > "$ready_issue_numbers"
+
+          if [[ ! -s "$ready_issue_numbers" ]]; then
+            echo "No unassigned open issues have the copilot-ready label"
+            exit 0
+          fi
+
+          sort -n -o "$ready_issue_numbers" "$ready_issue_numbers"
+          read -r issue_number < "$ready_issue_numbers"
+
+          jq -n \
+            --arg target_repo "$REPOSITORY" \
+            --arg base_branch "$DEFAULT_BRANCH" \
+            '{
+              assignees: ["copilot-swe-agent[bot]"],
+              agent_assignment: {
+                target_repo: $target_repo,
+                base_branch: $base_branch
+              }
+            }' |
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${REPOSITORY}/issues/${issue_number}/assignees" \
+              --input -
+
+          echo "Assigned Copilot to issue #${issue_number}"

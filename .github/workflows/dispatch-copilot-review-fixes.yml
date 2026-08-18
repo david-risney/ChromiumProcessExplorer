@@ -1,0 +1,160 @@
+name: Dispatch Copilot review fixes
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: copilot-review-fix-dispatcher
+  cancel-in-progress: false
+
+jobs:
+  dispatch-review-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Dispatch next review fix
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_REVIEW_DISPATCH_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::notice::COPILOT_REVIEW_DISPATCH_TOKEN is not configured; skipping optional dispatcher"
+            exit 0
+          fi
+
+          owner="${REPOSITORY%%/*}"
+          name="${REPOSITORY#*/}"
+          query='
+            query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100, after: $cursor) {
+                    pageInfo {
+                      endCursor
+                      hasNextPage
+                    }
+                    nodes {
+                      isOutdated
+                      isResolved
+                      comments(first: 1) {
+                        nodes {
+                          id
+                          url
+                          author {
+                            login
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          '
+
+          mapfile -t pull_numbers < <(
+            gh api --paginate \
+              "/repos/${REPOSITORY}/pulls?state=open&sort=created&direction=asc&per_page=100" \
+              --jq '
+                .[]
+                | select(.head.repo.full_name == .base.repo.full_name)
+                | select(any(.labels[]?; .name == "copilot-autofix"))
+                | .number
+              '
+          )
+
+          for pull_number in "${pull_numbers[@]}"; do
+            existing_comments="${RUNNER_TEMP}/copilot-dispatch-comments-${pull_number}.txt"
+            gh api --paginate \
+              "/repos/${REPOSITORY}/issues/${pull_number}/comments?per_page=100" \
+              --jq '.[].body // empty' > "$existing_comments"
+
+            review_rows=()
+            cursor=""
+
+            while true; do
+              graphql_args=(
+                api graphql
+                -f "query=$query"
+                -f "owner=$owner"
+                -f "name=$name"
+                -F "number=$pull_number"
+              )
+              if [[ -n "$cursor" ]]; then
+                graphql_args+=(-f "cursor=$cursor")
+              fi
+
+              response="$(gh "${graphql_args[@]}")"
+              mapfile -t page_rows < <(
+                jq -r '
+                  .data.repository.pullRequest.reviewThreads.nodes[]
+                  | select(.isResolved == false and .isOutdated == false)
+                  | .comments.nodes[0]
+                  | select(
+                      .author.login == "copilot-pull-request-reviewer"
+                      or .author.login == "copilot-pull-request-reviewer[bot]"
+                    )
+                  | [.id, .url]
+                  | @tsv
+                ' <<< "$response"
+              )
+              review_rows+=("${page_rows[@]}")
+
+              if [[ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<< "$response")" != "true" ]]; then
+                break
+              fi
+              cursor="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<< "$response")"
+            done
+
+            comment_ids=()
+            comment_urls=()
+
+            for row in "${review_rows[@]}"; do
+              IFS=$'\t' read -r comment_id comment_url <<< "$row"
+              marker="<!-- copilot-review-dispatch:${comment_id} -->"
+              if grep -Fq "$marker" "$existing_comments"; then
+                continue
+              fi
+
+              comment_ids+=("$comment_id")
+              comment_urls+=("$comment_url")
+              if (( ${#comment_ids[@]} == 20 )); then
+                break
+              fi
+            done
+
+            if (( ${#comment_ids[@]} == 0 )); then
+              continue
+            fi
+
+            dispatch_body="${RUNNER_TEMP}/copilot-review-dispatch-${pull_number}.md"
+            {
+              echo "@copilot Please address the unresolved Copilot code review comments linked below on this pull request."
+              echo
+              for comment_url in "${comment_urls[@]}"; do
+                printf -- "- %s\n" "$comment_url"
+              done
+              echo
+              for comment_id in "${comment_ids[@]}"; do
+                printf '<!-- copilot-review-dispatch:%s -->\n' "$comment_id"
+              done
+            } > "$dispatch_body"
+
+            jq -Rs '{body: .}' "$dispatch_body" |
+              gh api \
+                --method POST \
+                "/repos/${REPOSITORY}/issues/${pull_number}/comments" \
+                --input - > /dev/null
+
+            echo "Dispatched ${#comment_ids[@]} review comment(s) for pull request #${pull_number}"
+            exit 0
+          done
+
+          echo "No undispatched Copilot review comments found"
