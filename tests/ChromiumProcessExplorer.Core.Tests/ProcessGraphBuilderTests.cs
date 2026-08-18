@@ -209,6 +209,42 @@ public sealed class ProcessGraphBuilderTests
         Assert.Equal(2, graph.CreateProcessTree().Roots.Count);
     }
 
+    [Fact]
+    public void BuildAddsElectronSubprocessEdge()
+    {
+        ProcessSnapshotEntry main = CreateProcess(20, 0, SnapshotTime);
+        ProcessSnapshotEntry renderer = CreateProcess(
+            21,
+            20,
+            SnapshotTime.AddSeconds(1));
+        ElectronRuntimeAnalysis electron = new(
+            [],
+            [
+                new ElectronProcessAssociation(
+                    20,
+                    21,
+                    100,
+                    ProcessRelationshipConfidence.High,
+                    true,
+                    [new ElectronEvidence("process-snapshot", "Validated parent.")]),
+            ],
+            []);
+
+        ProcessGraph graph = ProcessGraphBuilder.Build(
+            [main, renderer],
+            CreateInspection(),
+            SnapshotTime,
+            electronRuntime: electron);
+
+        ProcessGraphEdge electronEdge = Assert.Single(
+            graph.Edges,
+            edge => edge.Type == ProcessRelationshipType.ChromiumSubprocess);
+        Assert.Equal((20, 21), (
+            electronEdge.Source.ProcessId,
+            electronEdge.Target.ProcessId));
+        Assert.Equal("electron-runtime-adapter", electronEdge.Evidence.Source);
+    }
+
     private static NamedPipeConnection CreateConnection(
         int serverProcessId,
         int clientProcessId,

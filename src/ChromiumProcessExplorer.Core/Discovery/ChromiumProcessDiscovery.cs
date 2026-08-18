@@ -120,6 +120,8 @@ public sealed class ChromiumProcessDiscovery
         IReadOnlyList<ProcessSnapshotEntry> processes = await processTask;
         MojoPipeEnumerationResult pipeResult = await pipeTask;
         CefRuntimeAnalysis cefRuntime = CefRuntimeAdapter.Analyze(processes);
+        ElectronRuntimeAnalysis electronRuntime =
+            ElectronRuntimeAdapter.Analyze(processes);
         MojoPipeInspectionResult inspection = await InspectMojoPipesAsync(
             pipeResult,
             processes,
@@ -139,7 +141,8 @@ public sealed class ChromiumProcessDiscovery
             inspection,
             capturedAt,
             cefRuntime,
-            webView2Runtime);
+            webView2Runtime,
+            electronRuntime);
         ProcessTree tree = graph.CreateProcessTree();
         CdpDiscoveryResult cdp = await _cdpEndpointProvider.DiscoverAsync(
             processes,
@@ -156,6 +159,7 @@ public sealed class ChromiumProcessDiscovery
         {
             CefRuntime = cefRuntime,
             WebView2Runtime = webView2Runtime,
+            ElectronRuntime = electronRuntime,
             Cdp = cdp,
         };
     }
@@ -293,6 +297,10 @@ public sealed record ChromiumDiscoveryResult(
     /// <summary>Gets WebView2-specific process and host analysis.</summary>
     public WebView2RuntimeAnalysis WebView2Runtime { get; init; } =
         WebView2RuntimeAnalysis.Empty;
+
+    /// <summary>Gets Electron-specific process and runtime analysis.</summary>
+    public ElectronRuntimeAnalysis ElectronRuntime { get; init; } =
+        ElectronRuntimeAnalysis.Empty;
 
     /// <summary>Gets configured and validated CDP transports.</summary>
     public CdpDiscoveryResult Cdp { get; init; } = new(

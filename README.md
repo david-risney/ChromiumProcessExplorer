@@ -17,9 +17,9 @@ The solution targets .NET 9 on Windows and contains:
 
 - **ChromiumProcessExplorer.Core** - reusable process discovery, Chromium
   command-line parsing, typed process-graph and generation-safe process-tree
-  construction, CEF and WebView2 runtime analysis, optional HWND topology, and
-  Mojo pipe and installation enumeration. The public APIs can be consumed by
-  the CLI, a future GUI, or other .NET applications.
+  construction, CEF, WebView2, and Electron runtime analysis, optional HWND
+  topology, and Mojo pipe and installation enumeration. The public APIs can be
+  consumed by the CLI, a future GUI, or other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
   parsing, Mojo pipe recognition, process-tree generation, and CEF runtime
@@ -165,8 +165,11 @@ associate a browser with its native host when generation-safe ancestry and
 explicit command-line references corroborate the relationship. For WebView2,
 loaded SDK/client modules classify hosts, while generation-safe ancestry,
 observed Mojo endpoints, and optional `--windows` HWND topology corroborate
-host-to-browser relationships. Electron still needs a platform-specific
-adapter.
+host-to-browser relationships. For Electron, renamed packaged executables are
+detected from `resources\app.asar` or loose application metadata; main,
+renderer, DevTools, GPU, utility, worker, service-worker, Crashpad, and Node
+helper roles retain their raw taxonomies and confidence-scored associations.
+Cooperative app-side process data can override passive role inference.
 
 ### Runtime diagnostics
 
@@ -228,8 +231,9 @@ implemented. CEF process roles, deployment layouts, explicit runtime paths,
 wrapper markers, risky switches, and confidence-scored browser/subprocess and
 host/browser associations are exposed. WebView2 loaded-module and optional
 generation-safe HWND evidence are also exposed without changing the strict OS
-parent tree. Deeper Electron support, logging diagnostics, packaging, and the
-GUI remain planned work.
+parent tree. Electron packaged/development layouts, process roles, application
+and runtime paths, Windows package identity, and main/child associations are
+also exposed. Logging diagnostics, packaging, and the GUI remain planned work.
 
 Open design investigations include:
 

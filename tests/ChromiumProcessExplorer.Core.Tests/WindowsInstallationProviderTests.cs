@@ -122,6 +122,44 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             evidence => evidence.Source == "running-process");
     }
 
+    [Fact]
+    public async Task DiscoverClassifiesRunningRenamedElectronExecutable()
+    {
+        string applicationPath = Path.Combine(_root, "RenamedElectron");
+        string resourcesPath = Path.Combine(applicationPath, "resources");
+        Directory.CreateDirectory(resourcesPath);
+        File.WriteAllText(Path.Combine(resourcesPath, "app.asar"), string.Empty);
+        string executablePath = Path.Combine(applicationPath, "sample.exe");
+        File.WriteAllText(executablePath, string.Empty);
+        ProcessSnapshotEntry process = new(
+            789,
+            1,
+            DateTimeOffset.UtcNow,
+            "sample.exe",
+            executablePath,
+            $"\"{executablePath}\" --type=renderer",
+            "renderer",
+            null,
+            true,
+            ["--type command-line switch"],
+            null);
+        WindowsInstallationProvider provider = new(
+            new WindowsInstallationDiscoveryOptions(
+                [],
+                includeKnownLocations: false));
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([process])).Installations);
+
+        Assert.Equal("Electron", installation.Platform);
+        Assert.Contains(
+            installation.Evidence,
+            evidence => evidence.Source == "electron-packaged-layout"
+                && evidence.Path?.EndsWith(
+                    Path.Combine("resources", "app.asar"),
+                    StringComparison.OrdinalIgnoreCase) == true);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

@@ -12,7 +12,8 @@ public static class ProcessGraphBuilder
         MojoPipeInspectionResult mojoInspection,
         DateTimeOffset processObservedAt,
         CefRuntimeAnalysis? cefRuntime = null,
-        WebView2RuntimeAnalysis? webView2Runtime = null)
+        WebView2RuntimeAnalysis? webView2Runtime = null,
+        ElectronRuntimeAnalysis? electronRuntime = null)
     {
         ArgumentNullException.ThrowIfNull(processes);
         ArgumentNullException.ThrowIfNull(mojoInspection);
@@ -175,6 +176,39 @@ public static class ProcessGraphBuilder
                                 windowEvidence.Select(item => item.Detail)),
                         })));
             }
+        }
+
+        foreach (ElectronProcessAssociation association in
+            electronRuntime?.Associations ?? [])
+        {
+            if (!TryGetCurrentProcess(
+                association.MainProcessId,
+                out ProcessSnapshotEntry? main)
+                || !TryGetCurrentProcess(
+                    association.ChildProcessId,
+                    out ProcessSnapshotEntry? child))
+            {
+                continue;
+            }
+
+            edges.Add(new ProcessGraphEdge(
+                GetIdentity(main),
+                GetIdentity(child),
+                ProcessRelationshipType.ChromiumSubprocess,
+                new ProcessRelationshipEvidence(
+                    "electron-runtime-adapter",
+                    association.Confidence,
+                    processObservedAt,
+                    new Dictionary<string, string?>
+                    {
+                        ["score"] = association.Score.ToString(
+                            CultureInfo.InvariantCulture),
+                        ["isAuthoritative"] = association.IsAuthoritative.ToString(
+                            CultureInfo.InvariantCulture),
+                        ["evidence"] = string.Join(
+                            " ",
+                            association.Evidence.Select(item => item.Detail)),
+                    })));
         }
 
         return new ProcessGraph(processArray, edges);
