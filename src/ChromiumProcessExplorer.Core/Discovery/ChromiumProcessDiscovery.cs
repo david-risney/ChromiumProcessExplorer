@@ -305,6 +305,25 @@ public sealed class ChromiumProcessDiscovery
         };
     }
 
+    /// <summary>Passively discovers diagnostic artifacts and configuration.</summary>
+    public async ValueTask<DiagnosticArtifactDiscoveryResult>
+        DiscoverDiagnosticArtifactsAsync(
+            bool includeSensitiveValues = false,
+            int? maximumProcessConcurrency = null,
+            CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<ProcessSnapshotEntry> processes =
+            await _processSnapshotter.CaptureAsync(
+                maximumProcessConcurrency,
+                cancellationToken);
+        return await Task.Run(
+            () => new DiagnosticArtifactProvider().Discover(
+                processes,
+                includeSensitiveValues,
+                cancellationToken),
+            cancellationToken);
+    }
+
     private static ProcessSnapshotEntry[] ApplyRuntimeRoles(
         IEnumerable<ProcessSnapshotEntry> processes,
         CefRuntimeAnalysis cef,

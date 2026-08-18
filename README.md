@@ -82,6 +82,9 @@ dotnet run --project src\ChromiumProcessExplorer.Cli -- process-details
 # Inspect one PID and explicitly include sensitive paths and command-line values.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- process-details --pid 1234 --include-sensitive --json
 
+# Passively discover diagnostic settings and redacted artifact metadata.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- diagnostics --json
+
 # Emit validated CDP endpoints and unavailable/configured transport states.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- cdp --json
 
@@ -142,6 +145,19 @@ architecture, integrity/elevation, package identity, evidence, and per-process
 issues. Paths, command lines, switch values, user-data directories, and loaded
 module paths use explicit sensitive-value wrappers and are redacted unless
 `--include-sensitive` is supplied.
+
+`diagnostics` is passive-only: it discovers configured/default Chromium,
+WebView2, Electron, and CEF log paths, Crashpad and WER locations, dumps,
+netlogs, traces, crash configuration, packaged-app deployment logs, and
+security-relevant switches. It reads filesystem metadata but never reads
+artifact contents, starts a capture, or uploads data. Artifact paths and
+switch values are redacted unless `--include-sensitive` is supplied; dumps,
+netlogs, traces, logs, and command-line-derived settings are always labeled
+potentially sensitive. Any future capture operation requires a separate,
+explicit consent flow.
+Its versioned JSON schema is currently `1.0`; associated process IDs identify
+current processes that led to a location, not the historical process that
+created a dump.
 
 ### Programmatic use
 
