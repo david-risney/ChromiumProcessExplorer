@@ -94,6 +94,8 @@ public sealed class ProcessDetailsProvider
                     CreateSensitive(item.Value, "command-line-switch-value")))
                 .ToArray();
             bool observedRole = commandLine.HasSwitch("type");
+            bool runtimeAdapterRole = process.Evidence.Any(item =>
+                item.StartsWith("Runtime adapter:", StringComparison.Ordinal));
             return new ProcessDetailEntry(
                 new ProcessIdentity(process.ProcessId, process.CreationTime),
                 process.ParentProcessId,
@@ -106,7 +108,9 @@ public sealed class ProcessDetailsProvider
                     ? "observed-command-line"
                     : process.ChromiumProcessType is null
                         ? "unclassified"
-                        : "inferred-browser",
+                        : runtimeAdapterRole
+                            ? "inferred-runtime-adapter"
+                            : "inferred-browser",
                 CreateSensitive(
                     process.UserDataDirectory,
                     "user-data-directory"),

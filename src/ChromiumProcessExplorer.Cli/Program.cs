@@ -360,7 +360,7 @@ internal static class CliApplication
             Console.WriteLine(
                 $"  command line: {FormatSensitive(process.CommandLine)}");
             Console.WriteLine(
-                $"  role: {process.ChromiumProcessRole ?? "unknown"} "
+                $"  role: {process.ProcessRole ?? "unknown"} "
                 + $"[{process.RoleSource}]");
             Console.WriteLine(
                 $"  user data: {FormatSensitive(process.UserDataDirectory)}");

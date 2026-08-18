@@ -246,6 +246,26 @@ public sealed class ChromiumProcessDiscovery
             await _processSnapshotter.CaptureAsync(
                 maximumProcessConcurrency,
                 cancellationToken);
+        CefRuntimeAnalysis cef = CefRuntimeAdapter.Analyze(processes);
+        ElectronRuntimeAnalysis electron = ElectronRuntimeAdapter.Analyze(processes);
+        WebView2RuntimeAnalysis webView2 = WebView2RuntimeAdapter.Analyze(
+            processes,
+            new MojoPipeInspectionResult(
+                DateTimeOffset.UtcNow,
+                [],
+                new NamedPipeInspectionStatistics(
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    TimeSpan.Zero),
+                [],
+                []));
         ProcessSnapshotEntry[] selected;
         List<DiscoveryIssue> selectionIssues = [];
         if (processId is int selectedProcessId)
@@ -263,26 +283,6 @@ public sealed class ChromiumProcessDiscovery
         }
         else
         {
-            CefRuntimeAnalysis cef = CefRuntimeAdapter.Analyze(processes);
-            ElectronRuntimeAnalysis electron = ElectronRuntimeAdapter.Analyze(processes);
-            WebView2RuntimeAnalysis webView2 = WebView2RuntimeAdapter.Analyze(
-                processes,
-                new MojoPipeInspectionResult(
-                    DateTimeOffset.UtcNow,
-                    [],
-                    new NamedPipeInspectionStatistics(
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        TimeSpan.Zero),
-                    [],
-                    []));
             HashSet<int> included = processes
                 .Where(process => process.IsLikelyChromium)
                 .Select(process => process.ProcessId)
@@ -295,6 +295,7 @@ public sealed class ChromiumProcessDiscovery
                 .ToArray();
         }
 
+        selected = ApplyRuntimeRoles(selected, cef, electron, webView2);
         ProcessDetailsResult result = new ProcessDetailsProvider().Create(
             selected,
             includeSensitiveValues);
@@ -302,6 +303,52 @@ public sealed class ChromiumProcessDiscovery
         {
             Issues = result.Issues.Concat(selectionIssues).ToArray(),
         };
+    }
+
+    private static ProcessSnapshotEntry[] ApplyRuntimeRoles(
+        IEnumerable<ProcessSnapshotEntry> processes,
+        CefRuntimeAnalysis cef,
+        ElectronRuntimeAnalysis electron,
+        WebView2RuntimeAnalysis webView2)
+    {
+        Dictionary<int, string> roles = [];
+        foreach (ElectronProcessInfo process in electron.Processes)
+        {
+            roles.TryAdd(
+                process.ProcessId,
+                $"electron-{process.Role.ToString().ToLowerInvariant()}");
+        }
+
+        foreach (CefProcessInfo process in cef.Processes)
+        {
+            roles.TryAdd(
+                process.ProcessId,
+                $"cef-{process.Role.ToString().ToLowerInvariant()}");
+        }
+
+        foreach (WebView2ProcessInfo process in webView2.Processes)
+        {
+            roles.TryAdd(
+                process.ProcessId,
+                $"webview2-{process.Role.ToString().ToLowerInvariant()}");
+        }
+
+        return processes.Select(process =>
+        {
+            if (process.ChromiumProcessType is not null
+                || !roles.TryGetValue(process.ProcessId, out string? role))
+            {
+                return process;
+            }
+
+            return process with
+            {
+                ChromiumProcessType = role,
+                Evidence = process.Evidence
+                    .Append($"Runtime adapter: classified process as {role}.")
+                    .ToArray(),
+            };
+        }).ToArray();
     }
 
     /// <summary>

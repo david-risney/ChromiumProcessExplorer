@@ -39,7 +39,7 @@ public sealed record ProcessDetailEntry(
     SensitiveStringValue ExecutablePath,
     SensitiveStringValue CommandLine,
     IReadOnlyList<ProcessSwitchDetail> Switches,
-    string? ChromiumProcessRole,
+    string? ProcessRole,
     string RoleSource,
     SensitiveStringValue UserDataDirectory,
     ProcessExecutableVersion? ExecutableVersion,

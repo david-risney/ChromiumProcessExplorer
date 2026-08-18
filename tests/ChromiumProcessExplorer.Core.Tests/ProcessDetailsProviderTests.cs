@@ -144,6 +144,23 @@ public sealed class ProcessDetailsProviderTests
     }
 
     [Fact]
+    public void CreateIdentifiesRuntimeAdapterRoleSource()
+    {
+        ProcessSnapshotEntry process = CreateProcess() with
+        {
+            CommandLine = @"""C:\Program Files\App\app.exe""",
+            ChromiumProcessType = "electron-main",
+            Evidence = ["Runtime adapter: classified process as electron-main."],
+        };
+        ProcessDetailsProvider provider = new(new StubInspector());
+
+        ProcessDetailEntry result = Assert.Single(provider.Create([process], false).Processes);
+
+        Assert.Equal("electron-main", result.ProcessRole);
+        Assert.Equal("inferred-runtime-adapter", result.RoleSource);
+    }
+
+    [Fact]
     public void WindowsInspectorExtractsCurrentProcessArchitectureAndVersion()
     {
         using Process current = Process.GetCurrentProcess();
