@@ -428,6 +428,9 @@ internal static class CliApplication
         IReadOnlyDictionary<int, WebView2ProcessInfo> webView2Processes =
             result.WebView2Runtime.Processes.ToDictionary(
                 process => process.ProcessId);
+        IReadOnlyDictionary<int, ElectronProcessInfo> electronProcesses =
+            result.ElectronRuntime.Processes.ToDictionary(
+                process => process.ProcessId);
         if (!options.AllProcesses)
         {
             HashSet<int> seeds = result.Processes
@@ -440,6 +443,8 @@ internal static class CliApplication
                     process => process.ProcessId))
                 .Concat(result.WebView2Runtime.HostAssociations.Select(
                     association => association.HostProcessId))
+                .Concat(result.ElectronRuntime.Processes.Select(
+                    process => process.ProcessId))
                 .Concat(result.Cdp.Transports.Select(transport => transport.ProcessId))
                 .Concat(mojoProcessIds)
                 .ToHashSet();
@@ -456,6 +461,7 @@ internal static class CliApplication
                     Roots = tree.Roots.Select(ToSerializableNode),
                     result.CefRuntime,
                     result.WebView2Runtime,
+                    result.ElectronRuntime,
                     result.Cdp,
                     ProcessGraph = graph,
                     result.MojoPipeInspection,
@@ -479,7 +485,8 @@ internal static class CliApplication
                 true,
                 mojoProcessIds,
                 cefProcesses,
-                webView2Processes);
+                webView2Processes,
+                electronProcesses);
         }
 
         if (result.CefRuntime.Associations.Count > 0)
@@ -540,6 +547,24 @@ internal static class CliApplication
             }
         }
 
+        if (result.ElectronRuntime.Associations.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Electron process associations");
+            foreach (ElectronProcessAssociation association in
+                result.ElectronRuntime.Associations)
+            {
+                string authority = association.IsAuthoritative
+                    ? "authoritative"
+                    : "inferred";
+                Console.WriteLine(
+                    $"  main {association.MainProcessId} -> "
+                    + $"child {association.ChildProcessId}: "
+                    + $"{association.Confidence} "
+                    + $"({association.Score}/100, {authority})");
+            }
+        }
+
         foreach (DiscoveryIssue issue in result.WebView2Runtime.Issues)
         {
             Console.Error.WriteLine(
@@ -565,13 +590,17 @@ internal static class CliApplication
         bool isLast,
         IReadOnlySet<int> mojoProcessIds,
         IReadOnlyDictionary<int, CefProcessInfo> cefProcesses,
-        IReadOnlyDictionary<int, WebView2ProcessInfo> webView2Processes)
+        IReadOnlyDictionary<int, WebView2ProcessInfo> webView2Processes,
+        IReadOnlyDictionary<int, ElectronProcessInfo> electronProcesses)
     {
         ProcessSnapshotEntry process = node.Process;
         _ = cefProcesses.TryGetValue(process.ProcessId, out CefProcessInfo? cef);
         _ = webView2Processes.TryGetValue(
             process.ProcessId,
             out WebView2ProcessInfo? webView2);
+        _ = electronProcesses.TryGetValue(
+            process.ProcessId,
+            out ElectronProcessInfo? electron);
         string branch = isLast ? "`- " : "|- ";
         string type = process.ChromiumProcessType is null
             ? string.Empty
@@ -583,11 +612,14 @@ internal static class CliApplication
         string webView2Badge = webView2 is null
             ? string.Empty
             : $" [WebView2:{webView2.Role}]";
+        string electronBadge = electron is null
+            ? string.Empty
+            : $" [Electron:{electron.Role}]";
         string path = process.ExecutablePath is null ? string.Empty : $" {process.ExecutablePath}";
 
         Console.WriteLine(
             $"{prefix}{branch}{process.ProcessId} {process.ImageName}"
-            + $"{type}{cefBadge}{webView2Badge}{mojo}{path}");
+            + $"{type}{cefBadge}{webView2Badge}{electronBadge}{mojo}{path}");
 
         string childPrefix = prefix + (isLast ? "   " : "|  ");
         if (cef is not null)
@@ -600,6 +632,11 @@ internal static class CliApplication
             WriteWebView2Details(webView2, childPrefix);
         }
 
+        if (electron is not null)
+        {
+            WriteElectronDetails(electron, childPrefix);
+        }
+
         for (int index = 0; index < node.Children.Count; index++)
         {
             WriteNode(
@@ -608,7 +645,66 @@ internal static class CliApplication
                 index == node.Children.Count - 1,
                 mojoProcessIds,
                 cefProcesses,
-                webView2Processes);
+                webView2Processes,
+                electronProcesses);
+        }
+    }
+
+    private static void WriteElectronDetails(
+        ElectronProcessInfo process,
+        string prefix)
+    {
+        if (process.UtilitySubType is not null)
+        {
+            Console.WriteLine(
+                $"{prefix}electron utility subtype: "
+                + process.UtilitySubType);
+        }
+
+        if (process.WindowType is not null)
+        {
+            Console.WriteLine(
+                $"{prefix}electron window type: {process.WindowType}");
+        }
+
+        ElectronRuntimePaths paths = process.Paths;
+        WriteElectronPath(prefix, "install", paths.InstallDirectory);
+        WriteElectronPath(prefix, "package root", paths.PackageRoot);
+        WriteElectronPath(prefix, "resources", paths.ResourcesDirectory);
+        WriteElectronPath(prefix, "application", paths.ApplicationPath);
+        WriteElectronPath(prefix, "user data", paths.UserDataDirectory);
+        WriteElectronPath(prefix, "session data", paths.SessionDataDirectory);
+        WriteElectronPath(prefix, "logs", paths.LogsDirectory);
+        WriteElectronPath(prefix, "crash dumps", paths.CrashDumpsDirectory);
+
+        if (process.PackageIdentity is not null)
+        {
+            Console.WriteLine(
+                $"{prefix}package: {process.PackageIdentity.PackageFullName}");
+        }
+
+        foreach (ElectronEvidence evidence in process.Evidence.Where(
+            evidence => evidence.Source is
+                "filesystem-marker" or "runtime-executable"
+                or "cooperative-electron-api"))
+        {
+            Console.WriteLine(
+                $"{prefix}electron evidence: {evidence.Source}: "
+                + $"{evidence.RawValue ?? evidence.Detail}");
+        }
+    }
+
+    private static void WriteElectronPath(
+        string prefix,
+        string label,
+        ElectronPathObservation? path)
+    {
+        if (path is not null)
+        {
+            string exists = path.Exists ? string.Empty : " (not observed on disk)";
+            Console.WriteLine(
+                $"{prefix}{label}: {path.Value} "
+                + $"[{path.Confidence}, {path.Source}]{exists}");
         }
     }
 

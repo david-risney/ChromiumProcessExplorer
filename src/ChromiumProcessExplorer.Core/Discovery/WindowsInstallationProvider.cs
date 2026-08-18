@@ -392,6 +392,15 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                         + $"{process.ImageName}.",
                 executablePath,
                 process.ProcessId));
+            if (platform == "Electron"
+                && GetElectronApplicationPath(executablePath) is string applicationPath)
+            {
+                builder.AddEvidence(new InstallationEvidence(
+                    "electron-packaged-layout",
+                    "Found Electron application resources next to the running executable.",
+                    applicationPath,
+                    process.ProcessId));
+            }
         }
     }
 
@@ -603,8 +612,35 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 "Electron application"), null);
         }
 
+        if (GetElectronApplicationPath(executablePath) is not null)
+        {
+            return ("Application", "Electron", GetProductName(executablePath)
+                ?? Path.GetFileNameWithoutExtension(fileName), null);
+        }
+
         return ("Application", "Chromium", GetProductName(executablePath)
             ?? Path.GetFileNameWithoutExtension(fileName), null);
+    }
+
+    private static string? GetElectronApplicationPath(string executablePath)
+    {
+        string? directory = Path.GetDirectoryName(executablePath);
+        if (directory is null)
+        {
+            return null;
+        }
+
+        string resources = Path.Combine(directory, "resources");
+        string archive = Path.Combine(resources, "app.asar");
+        if (File.Exists(archive))
+        {
+            return archive;
+        }
+
+        string looseApplication = Path.Combine(resources, "app");
+        return File.Exists(Path.Combine(looseApplication, "package.json"))
+            ? looseApplication
+            : null;
     }
 
     private static string? InferChannel(string path)
