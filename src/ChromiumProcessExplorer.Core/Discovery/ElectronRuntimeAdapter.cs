@@ -26,14 +26,17 @@ public static class ElectronRuntimeAdapter
     {
         ArgumentNullException.ThrowIfNull(processes);
 
-        Dictionary<ProcessIdentity, ElectronCooperativeProcessInfo> cooperativeByIdentity =
-            (cooperativeProcesses ?? []).ToDictionary(item => item.Identity);
+        Dictionary<ProcessIdentity, ElectronCooperativeProcessInfo[]> cooperativeByIdentity =
+            (cooperativeProcesses ?? [])
+                .GroupBy(item => item.Identity)
+                .ToDictionary(group => group.Key, group => group.ToArray());
         Candidate[] candidates = processes
             .Select(process => CreateCandidate(
                 process,
                 cooperativeByIdentity.GetValueOrDefault(
-                    new ProcessIdentity(process.ProcessId, process.CreationTime))))
+                    new ProcessIdentity(process.ProcessId, process.CreationTime)) ?? []))
             .ToArray();
+        candidates = NormalizeNodeHelpers(candidates);
         Candidate[] mains = candidates.Where(candidate => candidate.IsMain).ToArray();
         List<ElectronProcessAssociation> associations = [];
 
@@ -94,20 +97,26 @@ public static class ElectronRuntimeAdapter
 
     private static Candidate CreateCandidate(
         ProcessSnapshotEntry process,
-        ElectronCooperativeProcessInfo? cooperative)
+        ElectronCooperativeProcessInfo[] cooperative)
     {
         ChromiumCommandLine commandLine = ChromiumCommandLine.Parse(process.CommandLine);
         string? rawType = commandLine.GetSwitchValue("type");
         string? utilitySubType = commandLine.GetSwitchValue("utility-sub-type");
         string? windowType = commandLine.GetSwitchValue("window-type");
         PackagingInfo packaging = InspectPackaging(process, commandLine);
-        bool isNodeHelper = IsNodeHelper(process, commandLine);
+        bool isNodeHelper = HasExplicitNodeHelperEvidence(process, commandLine);
         bool hasExplicitType = commandLine.HasSwitch("type");
-        bool isMain = !hasExplicitType
-            && !isNodeHelper
-            && process.CommandLine is not null
-            && packaging.HasElectronEvidence;
-        ElectronProcessRole role = cooperative?.Role
+        ElectronProcessRole? cooperativeRole = cooperative
+            .Select(item => (ElectronProcessRole?)item.Role)
+            .FirstOrDefault(role => role != ElectronProcessRole.Other)
+            ?? cooperative.Select(item => (ElectronProcessRole?)item.Role).FirstOrDefault();
+        bool isMain = cooperative.Length > 0
+            ? cooperativeRole == ElectronProcessRole.Main
+            : !hasExplicitType
+                && !isNodeHelper
+                && process.CommandLine is not null
+                && packaging.HasElectronEvidence;
+        ElectronProcessRole role = cooperativeRole
             ?? ClassifyRole(rawType, windowType, isNodeHelper, isMain);
         List<ElectronEvidence> evidence = [.. packaging.Evidence];
 
@@ -142,26 +151,26 @@ public static class ElectronRuntimeAdapter
                 "The process is marked as an ELECTRON_RUN_AS_NODE helper."));
         }
 
-        if (cooperative is not null)
+        foreach (ElectronCooperativeProcessInfo cooperativeItem in cooperative)
         {
             evidence.Add(new ElectronEvidence(
                 "cooperative-electron-api",
-                $"Electron app-side process data classified this process as {cooperative.Role}.",
-                cooperative.Source));
-            if (cooperative.ServiceName is not null)
+                $"Electron app-side process data classified this process as {cooperativeItem.Role}.",
+                cooperativeItem.Source));
+            if (cooperativeItem.ServiceName is not null)
             {
                 evidence.Add(new ElectronEvidence(
                     "cooperative-electron-api",
                     "Electron reported a process service name.",
-                    cooperative.ServiceName));
+                    cooperativeItem.ServiceName));
             }
 
-            if (cooperative.WebContentsType is not null)
+            if (cooperativeItem.WebContentsType is not null)
             {
                 evidence.Add(new ElectronEvidence(
                     "cooperative-electron-api",
                     "Electron reported a webContents type.",
-                    cooperative.WebContentsType));
+                    cooperativeItem.WebContentsType));
             }
         }
 
@@ -177,8 +186,46 @@ public static class ElectronRuntimeAdapter
             packaging.PackageIdentity,
             packaging.PackageName,
             packaging.PackageVersion,
-            cooperative is not null,
+            cooperative.Length > 0,
+            HasNodeScriptArgument(commandLine),
             evidence);
+    }
+
+    private static Candidate[] NormalizeNodeHelpers(Candidate[] candidates)
+    {
+        Dictionary<int, Candidate> byProcessId = candidates.ToDictionary(
+            candidate => candidate.Process.ProcessId);
+        return candidates
+            .Select(candidate =>
+            {
+                if (!candidate.IsMain
+                    || !candidate.HasNodeScriptArgument
+                    || !byProcessId.TryGetValue(
+                        candidate.Process.ParentProcessId,
+                        out Candidate? parent)
+                    || !parent.IsMain
+                    || !PathsEqual(
+                        parent.Process.ExecutablePath,
+                        candidate.Process.ExecutablePath))
+                {
+                    return candidate;
+                }
+
+                return candidate with
+                {
+                    IsMain = false,
+                    Role = ElectronProcessRole.NodeHelper,
+                    Evidence =
+                    [
+                        .. candidate.Evidence,
+                        new ElectronEvidence(
+                            "process-snapshot",
+                            "A positional Node script is launched beneath another "
+                                + "Electron main process using the same executable."),
+                    ],
+                };
+            })
+            .ToArray();
     }
 
     private static PackagingInfo InspectPackaging(
@@ -512,7 +559,7 @@ public static class ElectronRuntimeAdapter
         };
     }
 
-    private static bool IsNodeHelper(
+    private static bool HasExplicitNodeHelperEvidence(
         ProcessSnapshotEntry process,
         ChromiumCommandLine commandLine)
     {
@@ -521,12 +568,17 @@ public static class ElectronRuntimeAdapter
                 StringComparison.OrdinalIgnoreCase))
             || commandLine.Arguments.Any(argument => argument.Equals(
                 "ELECTRON_RUN_AS_NODE",
-                StringComparison.OrdinalIgnoreCase))
-            || commandLine.Arguments
-                .Skip(1)
-                .Where(argument => !argument.StartsWith('-'))
-                .Any(argument => NodeScriptExtensions.Contains(
-                    Path.GetExtension(argument)));
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasNodeScriptArgument(
+        ChromiumCommandLine commandLine)
+    {
+        return commandLine.Arguments
+            .Skip(1)
+            .Where(argument => !argument.StartsWith('-'))
+            .Any(argument => NodeScriptExtensions.Contains(
+                Path.GetExtension(argument)));
     }
 
     private static ElectronPathObservation? ObserveExisting(
@@ -661,9 +713,9 @@ public static class ElectronRuntimeAdapter
     {
         return !parent.IsProcessIdReused
             && !child.IsProcessIdReused
-            && (parent.CreationTime is null
-                || child.CreationTime is null
-                || parent.CreationTime <= child.CreationTime);
+            && parent.CreationTime is not null
+            && child.CreationTime is not null
+            && parent.CreationTime <= child.CreationTime;
     }
 
     private static bool HasStartupProximity(
@@ -723,6 +775,7 @@ public static class ElectronRuntimeAdapter
         string? PackageName,
         string? PackageVersion,
         bool HasCooperativeEvidence,
+        bool HasNodeScriptArgument,
         IReadOnlyList<ElectronEvidence> Evidence)
     {
         public ElectronProcessInfo ToProcessInfo(ElectronRuntimePaths paths)

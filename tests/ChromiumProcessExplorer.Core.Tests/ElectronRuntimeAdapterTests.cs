@@ -114,6 +114,11 @@ public sealed class ElectronRuntimeAdapterTests : IDisposable
                 "app.getAppMetrics()",
                 ServiceName: "dedicated-worker"),
             new(
+                new ProcessIdentity(101, worker.CreationTime),
+                ElectronProcessRole.Worker,
+                "webContents.getAllWebContents()",
+                WebContentsType: "worker"),
+            new(
                 new ProcessIdentity(102, serviceWorker.CreationTime),
                 ElectronProcessRole.ServiceWorker,
                 "webContents.getAllWebContents()",
@@ -156,6 +161,25 @@ public sealed class ElectronRuntimeAdapterTests : IDisposable
         Assert.Equal(
             ElectronProcessRole.NodeHelper,
             result.Processes.Single(process => process.ProcessId == 101).Role);
+    }
+
+    [Fact]
+    public void AnalyzeKeepsDevelopmentElectronMainWithScriptArgument()
+    {
+        string directory = Path.Combine(_root, "Development");
+        Directory.CreateDirectory(directory);
+        string executable = Path.Combine(directory, "electron.exe");
+        File.WriteAllText(executable, string.Empty);
+        ProcessSnapshotEntry main = CreateProcess(
+            100,
+            999,
+            executable,
+            "main.js");
+
+        ElectronProcessInfo result = Assert.Single(
+            ElectronRuntimeAdapter.Analyze([main]).Processes);
+
+        Assert.Equal(ElectronProcessRole.Main, result.Role);
     }
 
     [Fact]
