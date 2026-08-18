@@ -76,6 +76,12 @@ dotnet run --project src\ChromiumProcessExplorer.Cli -- renderer-origins --json
 # Add a short, version-sensitive trace correlation experiment.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- renderer-origins --trace --json
 
+# Show redacted details for Chromium-related processes.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- process-details
+
+# Inspect one PID and explicitly include sensitive paths and command-line values.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- process-details --pid 1234 --include-sensitive --json
+
 # Emit validated CDP endpoints and unavailable/configured transport states.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- cdp --json
 
@@ -128,6 +134,14 @@ reported as separate topology and process lists because CDP does not expose a
 stable target-to-PID join. `--trace` adds a bounded experimental capture;
 trace-derived mappings remain version-sensitive, medium-confidence, and
 non-authoritative.
+
+`process-details` emits the stable `1.0` diagnostics schema for either one PID
+or the Chromium-related snapshot. It includes generation identity, parent PID,
+observed and inferred roles, parsed switches, versions, architecture, native
+architecture, integrity/elevation, package identity, evidence, and per-process
+issues. Paths, command lines, switch values, user-data directories, and loaded
+module paths use explicit sensitive-value wrappers and are redacted unless
+`--include-sensitive` is supplied.
 
 ### Programmatic use
 

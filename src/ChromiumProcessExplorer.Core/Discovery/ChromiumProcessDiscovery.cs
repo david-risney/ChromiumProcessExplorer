@@ -235,6 +235,122 @@ public sealed class ChromiumProcessDiscovery
             cancellationToken);
     }
 
+    /// <summary>Creates versioned detailed diagnostics for one PID or Chromium processes.</summary>
+    public async ValueTask<ProcessDetailsResult> DiscoverProcessDetailsAsync(
+        int? processId = null,
+        bool includeSensitiveValues = false,
+        int? maximumProcessConcurrency = null,
+        CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<ProcessSnapshotEntry> processes =
+            await _processSnapshotter.CaptureAsync(
+                maximumProcessConcurrency,
+                cancellationToken);
+        CefRuntimeAnalysis cef = CefRuntimeAdapter.Analyze(processes);
+        ElectronRuntimeAnalysis electron = ElectronRuntimeAdapter.Analyze(processes);
+        WebView2RuntimeAnalysis webView2 = WebView2RuntimeAdapter.Analyze(
+            processes,
+            new MojoPipeInspectionResult(
+                DateTimeOffset.UtcNow,
+                [],
+                new NamedPipeInspectionStatistics(
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    TimeSpan.Zero),
+                [],
+                []));
+        ProcessSnapshotEntry[] selected;
+        List<DiscoveryIssue> selectionIssues = [];
+        if (processId is int selectedProcessId)
+        {
+            selected = processes
+                .Where(process => process.ProcessId == selectedProcessId)
+                .ToArray();
+            if (selected.Length == 0)
+            {
+                selectionIssues.Add(new DiscoveryIssue(
+                    "process-selection",
+                    "The requested process was not present in the captured snapshot.",
+                    selectedProcessId));
+            }
+        }
+        else
+        {
+            HashSet<int> included = processes
+                .Where(process => process.IsLikelyChromium)
+                .Select(process => process.ProcessId)
+                .Concat(cef.Processes.Select(process => process.ProcessId))
+                .Concat(electron.Processes.Select(process => process.ProcessId))
+                .Concat(webView2.Processes.Select(process => process.ProcessId))
+                .ToHashSet();
+            selected = processes
+                .Where(process => included.Contains(process.ProcessId))
+                .ToArray();
+        }
+
+        selected = ApplyRuntimeRoles(selected, cef, electron, webView2);
+        ProcessDetailsResult result = new ProcessDetailsProvider().Create(
+            selected,
+            includeSensitiveValues);
+        return result with
+        {
+            Issues = result.Issues.Concat(selectionIssues).ToArray(),
+        };
+    }
+
+    private static ProcessSnapshotEntry[] ApplyRuntimeRoles(
+        IEnumerable<ProcessSnapshotEntry> processes,
+        CefRuntimeAnalysis cef,
+        ElectronRuntimeAnalysis electron,
+        WebView2RuntimeAnalysis webView2)
+    {
+        Dictionary<int, string> roles = [];
+        foreach (ElectronProcessInfo process in electron.Processes)
+        {
+            roles.TryAdd(
+                process.ProcessId,
+                $"electron-{process.Role.ToString().ToLowerInvariant()}");
+        }
+
+        foreach (CefProcessInfo process in cef.Processes)
+        {
+            roles.TryAdd(
+                process.ProcessId,
+                $"cef-{process.Role.ToString().ToLowerInvariant()}");
+        }
+
+        foreach (WebView2ProcessInfo process in webView2.Processes)
+        {
+            roles.TryAdd(
+                process.ProcessId,
+                $"webview2-{process.Role.ToString().ToLowerInvariant()}");
+        }
+
+        return processes.Select(process =>
+        {
+            if (process.ChromiumProcessType is not null
+                || !roles.TryGetValue(process.ProcessId, out string? role))
+            {
+                return process;
+            }
+
+            return process with
+            {
+                ChromiumProcessType = role,
+                Evidence = process.Evidence
+                    .Append($"Runtime adapter: classified process as {role}.")
+                    .ToArray(),
+            };
+        }).ToArray();
+    }
+
     /// <summary>
     /// Enumerates Mojo pipes and inspects existing foreign handles for endpoint
     /// process information using isolated helper processes.
