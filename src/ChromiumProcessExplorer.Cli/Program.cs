@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ChromiumProcessExplorer.Core.Broker;
 using ChromiumProcessExplorer.Core.Discovery;
 
 if (args is [HandleQueryWorker.WorkerArgument])
@@ -40,6 +41,15 @@ internal static class CliApplication
 
         try
         {
+            if (options.Command.StartsWith(
+                "broker-",
+                StringComparison.Ordinal))
+            {
+                return await RunBrokerCommandAsync(
+                    options,
+                    cancellation.Token);
+            }
+
             ChromiumProcessDiscovery discovery = new();
             string workerPath = Environment.ProcessPath
                 ?? throw new InvalidOperationException(
@@ -142,6 +152,57 @@ internal static class CliApplication
             Console.Error.WriteLine($"error: {exception.Message}");
             return 1;
         }
+    }
+
+    private static async Task<int> RunBrokerCommandAsync(
+        CliOptions options,
+        CancellationToken cancellationToken)
+    {
+        string operation = options.Command switch
+        {
+            "broker-probe" => BrokerOperations.Probe,
+            "broker-process-details" => BrokerOperations.ProcessDetails,
+            "broker-installations" => BrokerOperations.Installations,
+            "broker-diagnostics" => BrokerOperations.Diagnostics,
+            "broker-cdp" => BrokerOperations.Cdp,
+            _ => throw new InvalidOperationException(
+                "Unknown broker command."),
+        };
+        object arguments = options.Command switch
+        {
+            "broker-process-details" => new BrokerProcessDetailsArguments(
+                options.ProcessId),
+            _ => new { },
+        };
+        ChromiumBrokerClient client = new(
+            BrokerServerOptions.CreateDefault().PipeName,
+            TimeSpan.FromSeconds(95));
+        BrokerResponse response = await client.SendAsync(
+            operation,
+            arguments,
+            cancellationToken);
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+        }
+        else if (response.Ok)
+        {
+            Console.WriteLine(
+                response.Result is JsonElement result
+                    ? JsonSerializer.Serialize(result, JsonOptions)
+                    : "Broker request completed.");
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                $"error: {response.Error?.Code}: {response.Error?.Message}");
+            if (response.Error?.RecommendedAction is string action)
+            {
+                Console.Error.WriteLine($"recommended action: {action}");
+            }
+        }
+
+        return response.Ok ? 0 : 1;
     }
 
     private static void WritePipeNames(MojoPipeEnumerationResult result, bool json)
@@ -1086,6 +1147,11 @@ internal static class CliApplication
                 case "renderer-origins":
                 case "process-details":
                 case "diagnostics":
+                case "broker-probe":
+                case "broker-process-details":
+                case "broker-installations":
+                case "broker-diagnostics":
+                case "broker-cdp":
                     if (commandSeen)
                     {
                         options = null!;
@@ -1145,6 +1211,13 @@ internal static class CliApplication
             }
         }
 
+        if (command.StartsWith("broker-", StringComparison.Ordinal)
+            && includeSensitiveValues)
+        {
+            options = null!;
+            return false;
+        }
+
         options = new CliOptions(
             command,
             json,
@@ -1173,6 +1246,11 @@ internal static class CliApplication
               cpe renderer-origins [--json] [--trace] [--concurrency N]
               cpe process-details [--pid PID] [--json] [--include-sensitive] [--concurrency N]
               cpe diagnostics [--json] [--include-sensitive] [--concurrency N]
+              cpe broker-probe [--json]
+              cpe broker-process-details [--pid PID] [--json]
+              cpe broker-installations [--json]
+              cpe broker-diagnostics [--json]
+              cpe broker-cdp [--json]
 
             Commands:
               process-tree  Show Chromium-related processes and their process ancestry.
@@ -1184,6 +1262,7 @@ internal static class CliApplication
               process-details
                             Show detailed diagnostics for one PID or Chromium processes.
               diagnostics   Passively discover logs, dumps, traces, and diagnostic settings.
+              broker-*      Invoke the corresponding typed operation through the broker.
 
             Options:
               --all            Include every process in the process tree.
