@@ -63,6 +63,9 @@ dotnet run --project src\ChromiumProcessExplorer.Cli -- process-tree
 # Emit structured output for automation and Copilot integration.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- process-tree --json
 
+# Report assembly and release version metadata.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- --version --json
+
 # Inspect visible Mojo pipes and resolve server/client endpoint processes.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- mojo-pipes
 
@@ -205,6 +208,17 @@ generic elevated shell. See [privileged broker](docs/privileged-broker.md) for
 the threat model, build/start/stop instructions, error contract, and
 least-privilege service migration.
 
+### Releases
+
+Pull requests and `main` builds run restore, build, all tests, and formatting
+verification on GitHub-hosted Windows runners. Semantic-version tags publish
+self-contained `win-x64` and `win-arm64` ZIPs containing the CLI, GUI, broker,
+and MCP server, plus SHA-256 checksums and generated release notes. The
+packages are currently unsigned and use portable extraction rather than an
+installer. See [release packaging](docs/release-packaging.md) for contents,
+installation/uninstallation, architecture tradeoffs, versioning, and explicit
+administrator behavior.
+
 ### Programmatic use
 
 ```csharp
@@ -317,9 +331,12 @@ operations after the user explicitly starts the broker as administrator.
 
 ## Administrative access
 
-Chromium Process Explorer must run as administrator to access the process,
-command-line, executable, and filesystem information needed for complete
-diagnostics. Some information may be unavailable when the tool is not elevated.
+Complete cross-process diagnostics generally require administrator access, but
+the packaged executables intentionally do not auto-elevate. Basic discovery
+runs unelevated and reports inaccessible data as partial coverage. Prefer
+explicitly starting the fixed-operation broker as administrator while keeping
+the CLI, GUI, MCP server, and Copilot client unelevated; an explicitly elevated
+frontend is also possible for direct local use.
 
 Treat diagnostic output as potentially sensitive: command lines, paths, logs,
 and user data locations can contain application data or secrets. Review output
@@ -335,7 +352,8 @@ generation-safe HWND evidence are also exposed without changing the strict OS
 parent tree. Electron packaged/development layouts, process roles, application
 and runtime paths, Windows package identity, and main/child associations are
 also exposed. Passive logging diagnostics and the Windows GUI are implemented;
-packaging remains planned work.
+CI and tagged self-contained release packaging are implemented; code signing
+and a conventional installer remain future work.
 
 Open design investigations include:
 

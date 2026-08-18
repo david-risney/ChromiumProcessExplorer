@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Validate tag and set version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+            throw "Release tag '$tag' is not a supported semantic version."
+          }
+
+          "RELEASE_VERSION=$($tag.Substring(1))" >> $env:GITHUB_ENV
+
+      - name: Restore, build, test, and verify formatting
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          dotnet restore ChromiumProcessExplorer.sln
+          dotnet build ChromiumProcessExplorer.sln --configuration Release --no-restore -p:Version=$env:RELEASE_VERSION
+          dotnet test ChromiumProcessExplorer.sln --configuration Release --no-build -p:Version=$env:RELEASE_VERSION
+          dotnet format ChromiumProcessExplorer.sln --no-restore --verify-no-changes
+
+      - name: Publish self-contained Windows packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $projects = @(
+            'src\ChromiumProcessExplorer.Cli\ChromiumProcessExplorer.Cli.csproj',
+            'src\ChromiumProcessExplorer.Gui\ChromiumProcessExplorer.Gui.csproj',
+            'src\ChromiumProcessExplorer.Broker\ChromiumProcessExplorer.Broker.csproj',
+            'src\ChromiumProcessExplorer.Mcp\ChromiumProcessExplorer.Mcp.csproj'
+          )
+
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          foreach ($rid in @('win-x64', 'win-arm64')) {
+            $staging = Join-Path $PWD "artifacts\ChromiumProcessExplorer-$env:RELEASE_VERSION-$rid"
+            New-Item -ItemType Directory -Force $staging | Out-Null
+            foreach ($project in $projects) {
+              dotnet publish $project `
+                --configuration Release `
+                --runtime $rid `
+                --self-contained true `
+                -p:Version=$env:RELEASE_VERSION `
+                -p:PublishSingleFile=true `
+                -p:IncludeNativeLibrariesForSelfExtract=true `
+                -p:EnableCompressionInSingleFile=true `
+                -p:PublishTrimmed=false `
+                -p:DebugSymbols=false `
+                -p:DebugType=None `
+                --output $staging
+            }
+
+            Copy-Item README.md (Join-Path $staging 'README.md')
+            Copy-Item docs\release-packaging.md (Join-Path $staging 'RELEASE.md')
+            Get-ChildItem $staging -Recurse -Include *.pdb,*.xml |
+              Remove-Item -Force
+
+            $zip = "$staging.zip"
+            Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zip
+          }
+
+          $x64Cli = Join-Path $PWD "artifacts\ChromiumProcessExplorer-$env:RELEASE_VERSION-win-x64\cpe.exe"
+          $reportedVersion = (& $x64Cli --version).Trim()
+          if ($reportedVersion -ne "Chromium Process Explorer $env:RELEASE_VERSION") {
+            throw "Published CLI reported unexpected version '$reportedVersion'."
+          }
+
+          Get-ChildItem artifacts\*.zip |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            } | Set-Content -Encoding ascii artifacts\SHA256SUMS.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChromiumProcessExplorer-${{ github.ref_name }}
+          path: |
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $assets = @(
+            Get-ChildItem artifacts\*.zip |
+              Sort-Object Name |
+              Select-Object -ExpandProperty FullName
+          )
+          $assets += (Resolve-Path artifacts\SHA256SUMS.txt).Path
+          gh release create "${{ github.ref_name }}" @assets `
+            --title "Chromium Process Explorer $env:RELEASE_VERSION" `
+            --generate-notes `
+            --verify-tag

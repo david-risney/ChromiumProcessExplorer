@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ChromiumProcessExplorer.Core;
 using ChromiumProcessExplorer.Core.Broker;
 using ChromiumProcessExplorer.Core.Discovery;
 
@@ -29,6 +30,12 @@ internal static class CliApplication
         if (options.ShowHelp)
         {
             PrintUsage(Console.Out);
+            return 0;
+        }
+
+        if (options.ShowVersion)
+        {
+            WriteVersion(options.Json);
             return 0;
         }
 
@@ -238,6 +245,26 @@ internal static class CliApplication
                 : string.Empty;
             Console.WriteLine($"{pipe.Name}{process}");
         }
+    }
+
+    private static void WriteVersion(bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new
+                {
+                    Product = "Chromium Process Explorer",
+                    ProductVersion.Version,
+                    ProductVersion.InformationalVersion,
+                    ProductVersion.SourceRevision,
+                },
+                JsonOptions));
+            return;
+        }
+
+        Console.WriteLine(
+            $"Chromium Process Explorer {ProductVersion.Version}");
     }
 
     private static void WriteInstallations(
@@ -1187,6 +1214,7 @@ internal static class CliApplication
         bool includeSensitiveValues = false;
         int? processId = null;
         bool help = false;
+        bool version = false;
         int? concurrency = null;
         bool commandSeen = false;
 
@@ -1248,6 +1276,9 @@ internal static class CliApplication
                 case "-h":
                     help = true;
                     break;
+                case "--version":
+                    version = true;
+                    break;
                 case "--concurrency":
                     if (++index >= args.Length
                         || !int.TryParse(args[index], out int parsedConcurrency)
@@ -1282,6 +1313,7 @@ internal static class CliApplication
             includeSensitiveValues,
             processId,
             help,
+            version,
             concurrency);
         return true;
     }
@@ -1305,6 +1337,7 @@ internal static class CliApplication
               cpe broker-installations [--json]
               cpe broker-diagnostics [--json]
               cpe broker-cdp [--json]
+              cpe --version [--json]
 
             Commands:
               process-tree  Show Chromium-related processes and their process ancestry.
@@ -1329,6 +1362,7 @@ internal static class CliApplication
                                Include paths, command lines, and switch values.
               --concurrency N  Bound parallel process metadata queries.
               -h, --help       Show this help.
+              --version        Show product and build version metadata.
             """);
     }
 
@@ -1342,6 +1376,7 @@ internal static class CliApplication
         bool IncludeSensitiveValues,
         int? ProcessId,
         bool ShowHelp,
+        bool ShowVersion,
         int? MaximumConcurrency);
 
 }

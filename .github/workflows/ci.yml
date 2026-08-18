@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-format:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore
+        run: dotnet restore ChromiumProcessExplorer.sln
+
+      - name: Build
+        run: dotnet build ChromiumProcessExplorer.sln --configuration Debug --no-restore
+
+      - name: Test
+        run: dotnet test ChromiumProcessExplorer.sln --configuration Debug --no-build
+
+      - name: Verify formatting
+        run: dotnet format ChromiumProcessExplorer.sln --no-restore --verify-no-changes
