@@ -420,6 +420,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         _processResult.CefRuntime,
                         _processResult.WebView2Runtime,
                         _processResult.ElectronRuntime,
+                        _processResult.AdditionalRuntime,
                         _processResult.Issues,
                     },
                 ProcessDetails = _detailsResult,

@@ -27,7 +27,17 @@ public sealed record InstallationMetadata(
     string? ResourcesPath,
     string? RuntimePath,
     bool? IsSharedRuntime,
-    string Confidence);
+    string Confidence)
+{
+    /// <summary>Gets the browser-managed application ID, when applicable.</summary>
+    public string? ApplicationId { get; init; }
+
+    /// <summary>Gets the browser platform hosting a managed app.</summary>
+    public string? BrowserPlatform { get; init; }
+
+    /// <summary>Gets the browser profile name hosting a managed app.</summary>
+    public string? BrowserProfileName { get; init; }
+}
 
 /// <summary>A Chromium browser, runtime, or application installation.</summary>
 public sealed record ChromiumInstallation(
@@ -81,6 +91,7 @@ public sealed record WindowsInstallationDiscoveryOptions
         IncludeKnownLocations = includeKnownLocations;
         IncludeRegistry = false;
         IncludePackages = false;
+        IncludeBrowserManagedApps = false;
         MaximumDepth = maximumDepth;
     }
 
@@ -97,6 +108,9 @@ public sealed record WindowsInstallationDiscoveryOptions
 
     /// <summary>Gets whether accessible WindowsApps package roots are included.</summary>
     public bool IncludePackages { get; init; } = true;
+
+    /// <summary>Gets whether browser profiles, shortcuts, and app registrations are included.</summary>
+    public bool IncludeBrowserManagedApps { get; init; } = true;
 
     /// <summary>Gets the maximum recursive depth beneath each search root.</summary>
     public int MaximumDepth { get; init; } = 12;
@@ -141,12 +155,32 @@ public sealed record WindowsPackageInstallation(
     bool? IsSharedRuntime,
     IReadOnlyList<InstallationEvidence> Evidence);
 
+/// <summary>A browser-managed installed app or PWA using a shared runtime.</summary>
+public sealed record BrowserManagedAppInstallation(
+    string AppId,
+    string Name,
+    string BrowserPlatform,
+    string? BrowserExecutablePath,
+    string? ProfileName,
+    string? ProfilePath,
+    string InstallPath,
+    IReadOnlyList<InstallationEvidence> Evidence);
+
 /// <summary>Finds Chromium-related Windows package installations.</summary>
 public interface IWindowsPackageInstallationProvider
 {
     /// <summary>Discovers accessible package installations.</summary>
     IReadOnlyList<WindowsPackageInstallation> Discover(
         IReadOnlyList<ProcessSnapshotEntry> runningProcesses,
+        ICollection<DiscoveryIssue> issues,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Discovers Chrome/Edge-family installed apps and PWAs.</summary>
+public interface IBrowserManagedAppProvider
+{
+    /// <summary>Discovers browser-managed app records and partial failures.</summary>
+    IReadOnlyList<BrowserManagedAppInstallation> Discover(
         ICollection<DiscoveryIssue> issues,
         CancellationToken cancellationToken = default);
 }

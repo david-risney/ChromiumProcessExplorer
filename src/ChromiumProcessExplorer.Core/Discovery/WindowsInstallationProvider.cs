@@ -23,6 +23,8 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             "package.nw",
             "Qt5WebEngineCore.dll",
             "Qt6WebEngineCore.dll",
+            "QtWebEngineProcess.exe",
+            "qtwebengine_resources.pak",
             "WebView2Loader.dll",
         };
 
@@ -69,6 +71,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
     private readonly WindowsInstallationDiscoveryOptions _options;
     private readonly IInstalledProgramProvider _installedProgramProvider;
     private readonly IWindowsPackageInstallationProvider _packageProvider;
+    private readonly IBrowserManagedAppProvider _browserManagedAppProvider;
 
     /// <summary>Creates a provider using default Windows search roots.</summary>
     public WindowsInstallationProvider(
@@ -76,7 +79,8 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         : this(
             options,
             new WindowsInstalledProgramProvider(),
-            new WindowsPackageInstallationProvider())
+            new WindowsPackageInstallationProvider(),
+            new WindowsBrowserManagedAppProvider())
     {
     }
 
@@ -85,12 +89,28 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         WindowsInstallationDiscoveryOptions? options,
         IInstalledProgramProvider installedProgramProvider,
         IWindowsPackageInstallationProvider packageProvider)
+        : this(
+            options,
+            installedProgramProvider,
+            packageProvider,
+            new WindowsBrowserManagedAppProvider())
+    {
+    }
+
+    /// <summary>Creates a provider using custom registry, package, and PWA sources.</summary>
+    public WindowsInstallationProvider(
+        WindowsInstallationDiscoveryOptions? options,
+        IInstalledProgramProvider installedProgramProvider,
+        IWindowsPackageInstallationProvider packageProvider,
+        IBrowserManagedAppProvider browserManagedAppProvider)
     {
         ArgumentNullException.ThrowIfNull(installedProgramProvider);
         ArgumentNullException.ThrowIfNull(packageProvider);
+        ArgumentNullException.ThrowIfNull(browserManagedAppProvider);
         _options = options ?? new WindowsInstallationDiscoveryOptions();
         _installedProgramProvider = installedProgramProvider;
         _packageProvider = packageProvider;
+        _browserManagedAppProvider = browserManagedAppProvider;
         if (_options.MaximumDepth < 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -168,6 +188,13 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                     cancellationToken);
             counters.PackageCount = packages.Count;
             DiscoverPackages(packages, installations);
+        }
+
+        if (_options.IncludeBrowserManagedApps)
+        {
+            DiscoverBrowserManagedApps(
+                _browserManagedAppProvider.Discover(issues, cancellationToken),
+                installations);
         }
 
         ChromiumInstallation[] results = installations.Values
@@ -307,6 +334,50 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 ? InferChannel(package.DisplayName)
                 : null);
             foreach (InstallationEvidence evidence in package.Evidence)
+            {
+                builder.AddEvidence(evidence);
+            }
+        }
+    }
+
+    private static void DiscoverBrowserManagedApps(
+        IEnumerable<BrowserManagedAppInstallation> apps,
+        Dictionary<string, InstallationBuilder> installations)
+    {
+        foreach (BrowserManagedAppInstallation app in apps)
+        {
+            string installPath = string.IsNullOrWhiteSpace(app.InstallPath)
+                ? app.BrowserExecutablePath is null
+                    ? app.ProfilePath ?? string.Empty
+                    : Path.GetDirectoryName(app.BrowserExecutablePath)
+                        ?? app.BrowserExecutablePath
+                : app.InstallPath;
+            if (string.IsNullOrWhiteSpace(installPath))
+            {
+                continue;
+            }
+
+            string profileIdentity = app.ProfilePath
+                ?? app.ProfileName
+                ?? "<unspecified>";
+            string key = $"browser-managed:{app.BrowserPlatform}:{app.AppId}:"
+                + profileIdentity;
+            if (!installations.TryGetValue(key, out InstallationBuilder? builder))
+            {
+                builder = new InstallationBuilder(
+                    NormalizePath(installPath),
+                    app.Name,
+                    "BrowserApp",
+                    RuntimePlatformIds.BrowserPwa);
+                installations.Add(key, builder);
+            }
+
+            if (app.BrowserExecutablePath is not null)
+            {
+                builder.SetExecutable(app.BrowserExecutablePath);
+            }
+            builder.SetBrowserManagedMetadata(app);
+            foreach (InstallationEvidence evidence in app.Evidence)
             {
                 builder.AddEvidence(evidence);
             }
@@ -527,7 +598,9 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             "Filesystem marker scan",
             platform switch
             {
-                "Electron" or "CEF" or "NW.js" or "Qt WebEngine" => false,
+                "Electron" or "CEF"
+                    or RuntimePlatformIds.Nwjs
+                    or RuntimePlatformIds.QtWebEngine => false,
                 "WebView2" => null,
                 _ => null,
             },
@@ -759,13 +832,17 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         if (markerNames.Contains("nw.dll", StringComparer.OrdinalIgnoreCase)
             || markerNames.Contains("package.nw", StringComparer.OrdinalIgnoreCase))
         {
-            return ("NW.js", GetDirectoryName(installPath, "NW.js application"));
+            return (
+                RuntimePlatformIds.Nwjs,
+                GetDirectoryName(installPath, "NW.js application"));
         }
 
         if (markerNames.Any(name =>
             name.EndsWith("WebEngineCore.dll", StringComparison.OrdinalIgnoreCase)))
         {
-            return ("Qt WebEngine", GetDirectoryName(installPath, "Qt WebEngine application"));
+            return (
+                RuntimePlatformIds.QtWebEngine,
+                GetDirectoryName(installPath, "Qt WebEngine application"));
         }
 
         if (markerNames.Contains("WebView2Loader.dll", StringComparer.OrdinalIgnoreCase)
@@ -961,7 +1038,19 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
             if (FindFileWithinDepth(installPath, "nw.dll", 3) is not null)
             {
-                return "NW.js";
+                return RuntimePlatformIds.Nwjs;
+            }
+
+            if (FindFileWithinDepth(
+                installPath,
+                "Qt6WebEngineCore.dll",
+                3) is not null
+                || FindFileWithinDepth(
+                    installPath,
+                    "Qt5WebEngineCore.dll",
+                    3) is not null)
+            {
+                return RuntimePlatformIds.QtWebEngine;
             }
         }
         catch (Exception exception) when (
@@ -1088,6 +1177,31 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 ?? Path.GetFileNameWithoutExtension(fileName), null);
         }
 
+        if (fileName.Equals("nw.exe", StringComparison.OrdinalIgnoreCase)
+            || FindSiblingFile(executablePath, "nw.dll") is not null)
+        {
+            return ("Application", RuntimePlatformIds.Nwjs, GetProductName(
+                executablePath) ?? Path.GetFileNameWithoutExtension(fileName), null);
+        }
+
+        if (fileName.StartsWith(
+            "QtWebEngineProcess",
+            StringComparison.OrdinalIgnoreCase)
+            || FindSiblingFile(
+                executablePath,
+                "Qt6WebEngineCore.dll") is not null
+            || FindSiblingFile(
+                executablePath,
+                "Qt5WebEngineCore.dll") is not null)
+        {
+            return (
+                "Application",
+                RuntimePlatformIds.QtWebEngine,
+                GetProductName(executablePath)
+                    ?? Path.GetFileNameWithoutExtension(fileName),
+                null);
+        }
+
         return ("Application", "Chromium", GetProductName(executablePath)
             ?? Path.GetFileNameWithoutExtension(fileName), null);
     }
@@ -1111,6 +1225,29 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         return File.Exists(Path.Combine(looseApplication, "package.json"))
             ? looseApplication
             : null;
+    }
+
+    private static string? FindSiblingFile(
+        string executablePath,
+        string fileName)
+    {
+        string? directory = Path.GetDirectoryName(executablePath);
+        if (directory is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            string candidate = Path.Combine(directory, fileName);
+            return File.Exists(candidate) ? candidate : null;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private static string? InferChannel(string path)
@@ -1301,6 +1438,9 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         private string? _runtimePath;
         private bool? _isSharedRuntime;
         private string _confidence = "Low";
+        private string? _applicationId;
+        private string? _browserPlatform;
+        private string? _browserProfileName;
 
         public InstallationBuilder(
             string installPath,
@@ -1372,6 +1512,21 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             _isSharedRuntime ??= package.IsSharedRuntime;
             SetInstallIdentity("MSIX/AppX", "Windows package");
             RaiseConfidence("High");
+        }
+
+        public void SetBrowserManagedMetadata(
+            BrowserManagedAppInstallation app)
+        {
+            _runtimePath ??= app.BrowserExecutablePath;
+            _resourcesPath ??= app.ProfilePath;
+            _isSharedRuntime = true;
+            _applicationId ??= app.AppId;
+            _browserPlatform ??= app.BrowserPlatform;
+            _browserProfileName ??= app.ProfileName;
+            SetInstallIdentity(
+                "BrowserManaged",
+                $"{app.BrowserPlatform} profile/registration");
+            RaiseConfidence(app.Evidence.Count >= 2 ? "High" : "Medium");
         }
 
         public void SetDiscoveryMetadata(
@@ -1470,7 +1625,12 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                     resourcesPath,
                     runtimePath,
                     _isSharedRuntime,
-                    _confidence),
+                    _confidence)
+                {
+                    ApplicationId = _applicationId,
+                    BrowserPlatform = _browserPlatform,
+                    BrowserProfileName = _browserProfileName,
+                },
                 _evidence
                     .OrderBy(item => item.Source, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
@@ -1504,6 +1664,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 "MSIX/AppX" => 100,
                 "MSI" or "Squirrel" or "NSIS" => 95,
                 "Registry" => 90,
+                "BrowserManaged" => 85,
                 "KnownLocation" => 70,
                 "Portable" => 40,
                 _ => 0,

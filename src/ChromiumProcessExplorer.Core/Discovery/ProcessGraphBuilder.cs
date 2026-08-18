@@ -13,7 +13,8 @@ public static class ProcessGraphBuilder
         DateTimeOffset processObservedAt,
         CefRuntimeAnalysis? cefRuntime = null,
         WebView2RuntimeAnalysis? webView2Runtime = null,
-        ElectronRuntimeAnalysis? electronRuntime = null)
+        ElectronRuntimeAnalysis? electronRuntime = null,
+        AdditionalRuntimeAnalysis? additionalRuntime = null)
     {
         ArgumentNullException.ThrowIfNull(processes);
         ArgumentNullException.ThrowIfNull(mojoInspection);
@@ -204,6 +205,38 @@ public static class ProcessGraphBuilder
                         ["score"] = association.Score.ToString(
                             CultureInfo.InvariantCulture),
                         ["isAuthoritative"] = association.IsAuthoritative.ToString(
+                            CultureInfo.InvariantCulture),
+                        ["evidence"] = string.Join(
+                            " ",
+                            association.Evidence.Select(item => item.Detail)),
+                    })));
+        }
+
+        foreach (AdditionalRuntimeAssociation association in
+            additionalRuntime?.Associations ?? [])
+        {
+            if (!TryGetCurrentProcess(
+                association.SourceProcessId,
+                out ProcessSnapshotEntry? source)
+                || !TryGetCurrentProcess(
+                    association.TargetProcessId,
+                    out ProcessSnapshotEntry? target))
+            {
+                continue;
+            }
+
+            edges.Add(new ProcessGraphEdge(
+                GetIdentity(source),
+                GetIdentity(target),
+                ProcessRelationshipType.ChromiumSubprocess,
+                new ProcessRelationshipEvidence(
+                    "additional-runtime-adapter",
+                    association.Confidence,
+                    processObservedAt,
+                    new Dictionary<string, string?>
+                    {
+                        ["platformId"] = association.PlatformId,
+                        ["score"] = association.Score.ToString(
                             CultureInfo.InvariantCulture),
                         ["evidence"] = string.Join(
                             " ",

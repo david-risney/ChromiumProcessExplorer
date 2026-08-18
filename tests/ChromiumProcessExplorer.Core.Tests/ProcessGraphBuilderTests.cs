@@ -245,6 +245,51 @@ public sealed class ProcessGraphBuilderTests
         Assert.Equal("electron-runtime-adapter", electronEdge.Evidence.Source);
     }
 
+    [Fact]
+    public void BuildAddsAdditionalRuntimeSubprocessEdge()
+    {
+        ProcessSnapshotEntry main = CreateProcess(20, 0, SnapshotTime);
+        ProcessSnapshotEntry renderer = CreateProcess(
+            21,
+            20,
+            SnapshotTime.AddSeconds(1));
+        AdditionalRuntimeAnalysis additional = new(
+            [],
+            [
+                new AdditionalRuntimeAssociation(
+                    20,
+                    21,
+                    RuntimePlatformIds.QtWebEngine,
+                    100,
+                    ProcessRelationshipConfidence.High,
+                    [
+                        new AdditionalRuntimeEvidence(
+                            "process-association",
+                            "Matched Qt process ancestry."),
+                    ]),
+            ],
+            [],
+            []);
+
+        ProcessGraph graph = ProcessGraphBuilder.Build(
+            [main, renderer],
+            CreateInspection(),
+            SnapshotTime,
+            additionalRuntime: additional);
+
+        ProcessGraphEdge edge = Assert.Single(
+            graph.Edges,
+            candidate => candidate.Type
+                == ProcessRelationshipType.ChromiumSubprocess);
+        Assert.Equal((20, 21), (
+            edge.Source.ProcessId,
+            edge.Target.ProcessId));
+        Assert.Equal("additional-runtime-adapter", edge.Evidence.Source);
+        Assert.Equal(
+            RuntimePlatformIds.QtWebEngine,
+            edge.Evidence.RawValues["platformId"]);
+    }
+
     private static NamedPipeConnection CreateConnection(
         int serverProcessId,
         int clientProcessId,
