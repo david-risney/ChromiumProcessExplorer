@@ -311,9 +311,12 @@ runtimes, libraries, and applications. Installation records may include:
 - Release channel
 - Architecture and other available metadata
 
-The project aims to provide many of the diagnostic and discovery features
-available in WebView2Utilities while extending them across additional
-Chromium-based application models.
+The project implements the read-only diagnostic and discovery capabilities
+mapped in the
+[WebView2Utilities compatibility matrix](docs/webview2utilities-compatibility.md)
+while extending them across additional Chromium-based application models.
+Registry/launch mutation and automatic collection of sensitive dump/log
+contents are explicitly outside that compatibility contract.
 
 ## Interfaces and architecture
 
@@ -360,13 +363,13 @@ Open design investigations include:
 - Additional host-to-browser evidence for CEF and Electron applications
 - Production migration of the privileged broker to a demand-start,
   least-privilege Windows service
-- The exact compatibility scope with WebView2Utilities
 
 ## Research and design notes
 
 Detailed investigations are available under `docs\`, including:
 
 - [WebView2 process association](docs/webview2-process-association.md)
+- [WebView2Utilities compatibility matrix](docs/webview2utilities-compatibility.md)
 - [Electron on Windows](docs/electron-investigation.md)
 - [CEF on Windows](docs/cef-investigation.md)
 - [Other Chromium-based platforms](docs/other-chromium-platforms.md)
