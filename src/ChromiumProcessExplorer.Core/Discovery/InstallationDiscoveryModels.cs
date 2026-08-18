@@ -7,6 +7,28 @@ public sealed record InstallationEvidence(
     string? Path = null,
     int? ProcessId = null);
 
+/// <summary>Package identity for an MSIX/AppX installation.</summary>
+public sealed record InstallationPackageIdentity(
+    string PackageFullName,
+    string PackageFamilyName,
+    string Name,
+    string? Version,
+    string? Architecture,
+    string? PublisherId);
+
+/// <summary>Richer provenance-bearing installation metadata.</summary>
+public sealed record InstallationMetadata(
+    string? Architecture,
+    string? Publisher,
+    string InstallType,
+    string? InstallSource,
+    string? VersionProvenance,
+    InstallationPackageIdentity? PackageIdentity,
+    string? ResourcesPath,
+    string? RuntimePath,
+    bool? IsSharedRuntime,
+    string Confidence);
+
 /// <summary>A Chromium browser, runtime, or application installation.</summary>
 public sealed record ChromiumInstallation(
     string Name,
@@ -16,6 +38,7 @@ public sealed record ChromiumInstallation(
     string? ExecutablePath,
     string? Version,
     string? Channel,
+    InstallationMetadata Metadata,
     IReadOnlyList<InstallationEvidence> Evidence);
 
 /// <summary>Statistics describing an installation discovery scan.</summary>
@@ -26,6 +49,8 @@ public sealed record InstallationDiscoveryStatistics(
     int RunningProcessCount,
     int InaccessibleDirectoryCount,
     int TruncatedDirectoryCount,
+    int RegistryRecordCount,
+    int PackageCount,
     TimeSpan Elapsed);
 
 /// <summary>Result of Chromium-related installation discovery.</summary>
@@ -54,6 +79,8 @@ public sealed record WindowsInstallationDiscoveryOptions
         ArgumentNullException.ThrowIfNull(searchRoots);
         SearchRoots = searchRoots;
         IncludeKnownLocations = includeKnownLocations;
+        IncludeRegistry = false;
+        IncludePackages = false;
         MaximumDepth = maximumDepth;
     }
 
@@ -65,6 +92,61 @@ public sealed record WindowsInstallationDiscoveryOptions
     /// <summary>Gets whether well-known browser and WebView2 locations are checked.</summary>
     public bool IncludeKnownLocations { get; init; } = true;
 
+    /// <summary>Gets whether uninstall registry records are included.</summary>
+    public bool IncludeRegistry { get; init; } = true;
+
+    /// <summary>Gets whether accessible WindowsApps package roots are included.</summary>
+    public bool IncludePackages { get; init; } = true;
+
     /// <summary>Gets the maximum recursive depth beneath each search root.</summary>
     public int MaximumDepth { get; init; } = 12;
+
+    /// <summary>Gets the maximum total directories inspected by one scan.</summary>
+    public int MaximumDirectories { get; init; } = 50_000;
+}
+
+/// <summary>An installed-program record from a Windows uninstall registry key.</summary>
+public sealed record InstalledProgramRecord(
+    string DisplayName,
+    string? DisplayVersion,
+    string? Publisher,
+    string? InstallLocation,
+    string? DisplayIconPath,
+    string? InstallSource,
+    string? UninstallString,
+    bool IsWindowsInstaller,
+    string Scope,
+    string RegistryView,
+    string RegistryPath);
+
+/// <summary>Reads installed-program registrations.</summary>
+public interface IInstalledProgramProvider
+{
+    /// <summary>Reads machine/user uninstall registrations in both registry views.</summary>
+    IReadOnlyList<InstalledProgramRecord> Discover(
+        ICollection<DiscoveryIssue> issues,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>A Chromium-related MSIX/AppX package installation.</summary>
+public sealed record WindowsPackageInstallation(
+    string DisplayName,
+    string Platform,
+    string InstallPath,
+    string? ExecutablePath,
+    InstallationPackageIdentity Identity,
+    string? Publisher,
+    string? ResourcesPath,
+    string? RuntimePath,
+    bool? IsSharedRuntime,
+    IReadOnlyList<InstallationEvidence> Evidence);
+
+/// <summary>Finds Chromium-related Windows package installations.</summary>
+public interface IWindowsPackageInstallationProvider
+{
+    /// <summary>Discovers accessible package installations.</summary>
+    IReadOnlyList<WindowsPackageInstallation> Discover(
+        IReadOnlyList<ProcessSnapshotEntry> runningProcesses,
+        ICollection<DiscoveryIssue> issues,
+        CancellationToken cancellationToken = default);
 }
