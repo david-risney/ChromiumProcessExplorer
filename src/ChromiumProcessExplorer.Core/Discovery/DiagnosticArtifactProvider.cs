@@ -323,7 +323,8 @@ public sealed class DiagnosticArtifactProvider
     {
         List<DiagnosticArtifact> artifacts = [];
         foreach (IGrouping<string, ArtifactCandidate> group in candidates.GroupBy(
-            candidate => $"{candidate.Kind}\0{candidate.Location}",
+            candidate =>
+                $"{candidate.Platform}\0{candidate.Kind}\0{candidate.Location}",
             StringComparer.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -392,7 +393,8 @@ public sealed class DiagnosticArtifactProvider
             }
             catch (Exception exception) when (
                 exception is IOException
-                or UnauthorizedAccessException)
+                or UnauthorizedAccessException
+                or System.Security.SecurityException)
             {
                 issues.Add(new DiscoveryIssue(
                     "diagnostic-artifact-enumeration",
@@ -641,10 +643,9 @@ public sealed class DiagnosticArtifactProvider
                 string? enableLogging = commandLine.GetSwitchValue("enable-logging");
                 if (!commandLine.HasSwitch("disable-logging")
                     && commandLine.HasSwitch("enable-logging")
-                    && (enableLogging is null
-                        || enableLogging.Equals(
-                            "file",
-                            StringComparison.OrdinalIgnoreCase))
+                    && enableLogging?.Equals(
+                        "file",
+                        StringComparison.OrdinalIgnoreCase) == true
                     && !commandLine.HasSwitch("log-file")
                     && process.Paths.UserDataDirectory is not null)
                 {
@@ -737,32 +738,30 @@ public sealed class DiagnosticArtifactProvider
                     }
                 }
 
-                AddFile(
-                    process.RuntimePaths.CrashReportConfigurationFile,
-                    DiagnosticArtifactKind.CrashConfiguration,
-                    "CEF crash_reporter.cfg");
-                AddDirectory(
-                    process.RuntimePaths.CrashReportDirectory,
-                    "CEF crash report directory");
-
-                void AddFile(
-                    string? path,
-                    DiagnosticArtifactKind kind,
-                    string source)
+                if (!string.IsNullOrWhiteSpace(snapshot.ExecutablePath))
                 {
-                    if (!string.IsNullOrWhiteSpace(path))
+                    string? executableDirectory =
+                        Path.GetDirectoryName(snapshot.ExecutablePath);
+                    if (executableDirectory is not null)
                     {
                         candidates.Add(new ArtifactCandidate(
-                            kind,
+                            DiagnosticArtifactKind.CrashConfiguration,
                             "CEF",
-                            source,
-                            path,
+                            "default CEF crash configuration",
+                            process.RuntimePaths.CrashReportConfigurationFile
+                                ?? Path.Combine(
+                                    executableDirectory,
+                                    "crash_reporter.cfg"),
                             false,
                             true,
                             [process.ProcessId],
-                            ["Observed by the CEF runtime adapter."]));
+                            ["CEF checks crash_reporter.cfg beside the main executable on Windows."]));
                     }
                 }
+
+                AddDirectory(
+                    process.RuntimePaths.CrashReportDirectory,
+                    "CEF crash report directory");
 
                 void AddDirectory(string? path, string source)
                 {

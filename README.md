@@ -155,6 +155,9 @@ switch values are redacted unless `--include-sensitive` is supplied; dumps,
 netlogs, traces, logs, and command-line-derived settings are always labeled
 potentially sensitive. Any future capture operation requires a separate,
 explicit consent flow.
+Its versioned JSON schema is currently `1.0`; associated process IDs identify
+current processes that led to a location, not the historical process that
+created a dump.
 
 ### Programmatic use
 

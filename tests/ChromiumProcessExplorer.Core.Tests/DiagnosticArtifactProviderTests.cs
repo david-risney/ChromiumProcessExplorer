@@ -66,6 +66,34 @@ public sealed class DiagnosticArtifactProviderTests
     }
 
     [Fact]
+    public void DiscoverDoesNotTreatElectronStderrLoggingAsFileLogging()
+    {
+        using TemporaryDirectory temporary = new();
+        string executable = Path.Combine(temporary.Path, "app.exe");
+        string resources = Path.Combine(temporary.Path, "resources");
+        Directory.CreateDirectory(resources);
+        File.WriteAllText(Path.Combine(resources, "app.asar"), string.Empty);
+        string userData = Path.Combine(temporary.Path, "User Data");
+        ProcessSnapshotEntry process = CreateProcess(
+            "app.exe",
+            $"\"{executable}\" --enable-logging --user-data-dir=\"{userData}\"")
+            with
+        {
+            ExecutablePath = executable,
+            UserDataDirectory = userData,
+        };
+        DiagnosticArtifactProvider provider = CreateProvider(new FakePathInspector());
+
+        DiagnosticArtifactDiscoveryResult result = provider.Discover(
+            [process],
+            includeSensitiveValues: true);
+
+        Assert.DoesNotContain(
+            result.Artifacts,
+            item => item.Source == "default Electron file logging path");
+    }
+
+    [Fact]
     public void DiscoverUsesCefDefaultDebugLog()
     {
         using TemporaryDirectory temporary = new();
@@ -89,6 +117,14 @@ public sealed class DiagnosticArtifactProviderTests
                 && item.Location.Value == Path.Combine(
                     temporary.Path,
                     "debug.log"));
+        Assert.Contains(
+            result.Artifacts,
+            item => item.Platform == "CEF"
+                && item.Source == "default CEF crash configuration"
+                && item.Status == DiagnosticArtifactStatus.Missing
+                && item.Location.Value == Path.Combine(
+                    temporary.Path,
+                    "crash_reporter.cfg"));
     }
 
     [Fact]

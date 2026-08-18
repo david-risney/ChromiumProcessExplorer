@@ -465,10 +465,11 @@ internal static class CliApplication
                 Console.WriteLine($"  last write: {lastWrite:O}");
             }
 
-            if (artifact.ProcessIds.Count > 0)
+            if (artifact.AssociatedProcessIds.Count > 0)
             {
                 Console.WriteLine(
-                    $"  PIDs: {string.Join(", ", artifact.ProcessIds)}");
+                    "  associated current PIDs: "
+                    + string.Join(", ", artifact.AssociatedProcessIds));
             }
 
             if (artifact.IsPotentiallySensitive)

@@ -66,7 +66,7 @@ public sealed record DiagnosticArtifact(
     long? Length,
     DateTimeOffset? LastWriteTime,
     bool IsPotentiallySensitive,
-    IReadOnlyList<int> ProcessIds,
+    IReadOnlyList<int> AssociatedProcessIds,
     IReadOnlyList<string> Evidence);
 
 /// <summary>A logging, crash, tracing, or risky-debugging configuration finding.</summary>
