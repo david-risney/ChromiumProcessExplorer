@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ChromiumProcessExplorer.Core\ChromiumProcessExplorer.Core.csproj" />
+    <ProjectReference Include="..\..\src\ChromiumProcessExplorer.Mcp\ChromiumProcessExplorer.Mcp.csproj" />
   </ItemGroup>
 
 </Project>

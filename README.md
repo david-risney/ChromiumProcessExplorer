@@ -85,6 +85,9 @@ dotnet run --project src\ChromiumProcessExplorer.Cli -- process-details --pid 12
 # Passively discover diagnostic settings and redacted artifact metadata.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- diagnostics --json
 
+# Probe the explicitly started local privileged broker.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- broker-probe --json
+
 # Emit validated CDP endpoints and unavailable/configured transport states.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- cdp --json
 
@@ -170,6 +173,18 @@ explicit consent flow.
 Its versioned JSON schema is currently `1.0`; associated process IDs identify
 current processes that led to a location, not the historical process that
 created a dump.
+
+### Privileged broker and Copilot
+
+The prototype privileged architecture keeps the CLI/MCP client unelevated and
+uses an explicitly started elevated `cpe-broker.exe`. The broker exposes only
+typed read-only Core operations over a same-user, same-logon named pipe with
+bounded JSON frames, finite deadlines, request IDs, structured errors, and
+argument-free audit logs. `.github\mcp.json` and the
+`chromium-process-explorer` project skill expose redacted MCP tools without a
+generic elevated shell. See [privileged broker](docs/privileged-broker.md) for
+the threat model, build/start/stop instructions, error contract, and
+least-privilege service migration.
 
 ### Programmatic use
 
@@ -266,10 +281,9 @@ Features are designed to be exposed through two executables backed by shared
 - **GUI** - planned interactive process-tree, diagnostics, and installation
   views.
 
-A Copilot skill will wrap the CLI so developers can request Chromium diagnostics
-through Copilot. The supported elevation model still needs investigation. It
-may require invoking the CLI with administrative elevation or exposing it
-through an MCP server that is already running as administrator.
+The repository includes a Copilot skill and typed stdio MCP bridge. Copilot
+remains unelevated and can call only the broker's fixed, read-only, redacted
+operations after the user explicitly starts the broker as administrator.
 
 ## Administrative access
 
@@ -295,8 +309,8 @@ also exposed. Logging diagnostics, packaging, and the GUI remain planned work.
 Open design investigations include:
 
 - Additional host-to-browser evidence for CEF and Electron applications
-- Administrative elevation for Copilot skill execution
-- Whether an elevated MCP server is the appropriate Copilot integration model
+- Production migration of the privileged broker to a demand-start,
+  least-privilege Windows service
 - The exact compatibility scope with WebView2Utilities
 
 ## Research and design notes
