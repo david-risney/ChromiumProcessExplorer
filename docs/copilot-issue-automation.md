@@ -53,8 +53,8 @@ Adding a workflow does not replay old `labeled` events. The existing
 2. Select **Assign Copilot to ready issues**.
 3. Select **Run workflow**, choose the default branch, and confirm
    **Run workflow**.
-4. Open the run and verify that **Assign next ready issue** succeeded. The first
-   run selects issue `#1`, the current lowest-numbered eligible issue.
+4. Open the run and verify that **Assign next ready issue** succeeded. The run
+   selects the current lowest-numbered eligible issue.
 5. Wait for the run to finish before manually running it again. Each additional
    run selects the next-lowest eligible issue. Stop when the log says that no
    unassigned open issues have the label.
@@ -110,7 +110,9 @@ permission to invoke Copilot.
 
 Scheduled workflows run from the default branch, so this dispatcher begins
 operating only after the workflow is merged. GitHub may delay scheduled runs
-during periods of high Actions load.
+during periods of high Actions load. Until
+`COPILOT_REVIEW_DISPATCH_TOKEN` is configured, scheduled runs exit successfully
+without inspecting pull requests.
 
 For projects spanning multiple repositories, add this workflow and its secret
 to each repository whose pull requests should be eligible.
