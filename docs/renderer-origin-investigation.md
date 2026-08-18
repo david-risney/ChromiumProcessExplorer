@@ -70,6 +70,17 @@ Tracing can emit `ProcessReadyInBrowser` and frame data containing **frame token
 - **Plain CDP**: good for **target/frame/session topology**, **not** enough for **stable PID→target**.  
 - **CDP + Tracing**: viable advanced enrichment path.
 
+### Implemented tracing experiment
+
+Chromium Process Explorer's opt-in `renderer-origins --trace` capture requests
+the `navigation` and `disabled-by-default-devtools.timeline` categories for a
+bounded interval. It recognizes frame records carrying `frame`/`frameId`,
+`url`, and `processId`/`pid`, including frame arrays emitted by browser tracing
+events. These records are useful correlations, but their event shape is not a
+stable public target-to-PID API. The tool therefore marks trace-derived
+mappings as medium-confidence, non-authoritative, snapshot-lifetime evidence.
+Unsupported or empty traces remain explicit partial-result issues.
+
 ---
 
 ## 4) Remote debugging transport and security

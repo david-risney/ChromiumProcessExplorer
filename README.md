@@ -70,6 +70,12 @@ dotnet run --project src\ChromiumProcessExplorer.Cli -- installations
 # Discover configured CDP ports and private debugging-pipe transports.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- cdp
 
+# Opt in to cooperative/CDP renderer-frame enrichment.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- renderer-origins --json
+
+# Add a short, version-sensitive trace correlation experiment.
+dotnet run --project src\ChromiumProcessExplorer.Cli -- renderer-origins --trace --json
+
 # Emit validated CDP endpoints and unavailable/configured transport states.
 dotnet run --project src\ChromiumProcessExplorer.Cli -- cdp --json
 
@@ -113,6 +119,15 @@ are reported as private, already-owned transports only after passive
 browser/controller handle correlation; protocol bytes are never read or
 written. Branded Chrome 136+ default-profile restrictions are surfaced
 explicitly.
+
+`renderer-origins` is deliberately opt-in because frame URLs can be sensitive.
+Supported WebView2 `GetProcessExtendedInfosAsync` observations map renderer OS
+PIDs to associated frame IDs and sources authoritatively for that cooperative
+snapshot. Public CDP `Target.getTargets` and `SystemInfo.getProcessInfo` are
+reported as separate topology and process lists because CDP does not expose a
+stable target-to-PID join. `--trace` adds a bounded experimental capture;
+trace-derived mappings remain version-sensitive, medium-confidence, and
+non-authoritative.
 
 ### Programmatic use
 

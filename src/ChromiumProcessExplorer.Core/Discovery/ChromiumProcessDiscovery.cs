@@ -207,6 +207,35 @@ public sealed class ChromiumProcessDiscovery
     }
 
     /// <summary>
+    /// Performs opt-in cooperative and CDP renderer/frame enrichment.
+    /// </summary>
+    public async ValueTask<RendererEnrichmentResult> DiscoverRendererEnrichmentAsync(
+        HandleQueryWorkerOptions workerOptions,
+        IReadOnlyList<WebView2ExtendedProcessObservation>? webView2 = null,
+        bool includeTracing = false,
+        int? maximumProcessConcurrency = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workerOptions);
+
+        IReadOnlyList<ProcessSnapshotEntry> processes =
+            await _processSnapshotter.CaptureAsync(
+                maximumProcessConcurrency,
+                cancellationToken);
+        CdpDiscoveryResult cdp = await _cdpEndpointProvider.DiscoverAsync(
+            processes,
+            workerOptions,
+            cancellationToken);
+        RendererEnrichmentProvider provider = new();
+        return await provider.EnrichAsync(
+            processes,
+            cdp,
+            webView2,
+            includeTracing,
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Enumerates Mojo pipes and inspects existing foreign handles for endpoint
     /// process information using isolated helper processes.
     /// </summary>
