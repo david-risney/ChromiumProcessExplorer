@@ -225,7 +225,7 @@ public sealed class RendererEnrichmentProvider
     private static string? GetOrigin(string value)
     {
         return Uri.TryCreate(value, UriKind.Absolute, out Uri? uri)
-            && uri.Scheme is "http" or "https"
+            && !string.IsNullOrWhiteSpace(uri.Host)
                 ? uri.GetLeftPart(UriPartial.Authority)
                 : null;
     }
@@ -287,6 +287,7 @@ internal sealed record CdpProtocolProcess(
 internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
 {
     private const int MaximumMessageBytes = 4 * 1024 * 1024;
+    private const int MaximumTraceEventCount = 10_000;
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan TraceDuration = TimeSpan.FromMilliseconds(500);
 
@@ -303,20 +304,20 @@ internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
         timeout.CancelAfter(CommandTimeout);
         await socket.ConnectAsync(webSocketDebuggerUrl, timeout.Token);
 
-        List<JsonElement> traceEvents = [];
+        TraceCollector trace = new(MaximumTraceEventCount);
         JsonElement targets = await SendCommandAsync(
             socket,
             1,
             "Target.getTargets",
             null,
-            traceEvents,
+            trace,
             timeout.Token);
         JsonElement processes = await SendCommandAsync(
             socket,
             2,
             "SystemInfo.getProcessInfo",
             null,
-            traceEvents,
+            trace,
             timeout.Token);
         List<string> issues = [];
         if (includeTracing)
@@ -331,7 +332,7 @@ internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
                         "navigation,disabled-by-default-devtools.timeline",
                     transferMode = "ReportEvents",
                 },
-                traceEvents,
+                trace,
                 timeout.Token);
             await Task.Delay(TraceDuration, cancellationToken);
             await SendCommandAsync(
@@ -339,16 +340,23 @@ internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
                 4,
                 "Tracing.end",
                 null,
-                traceEvents,
+                trace,
                 timeout.Token);
             await ReceiveUntilTracingCompleteAsync(
                 socket,
-                traceEvents,
+                trace,
                 timeout.Token);
-            if (traceEvents.Count == 0)
+            if (trace.Events.Count == 0)
             {
                 issues.Add(
                     "The bounded trace returned no frame/process correlation events.");
+            }
+
+            if (trace.IsTruncated)
+            {
+                issues.Add(
+                    $"The trace exceeded {MaximumTraceEventCount} events and "
+                        + "was truncated.");
             }
         }
 
@@ -357,7 +365,7 @@ internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
             DateTimeOffset.UtcNow,
             ParseTargets(targets),
             ParseProcesses(processes),
-            traceEvents,
+            trace.Events,
             issues);
     }
 
@@ -366,7 +374,7 @@ internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
         int id,
         string method,
         object? parameters,
-        List<JsonElement> traceEvents,
+        TraceCollector trace,
         CancellationToken cancellationToken)
     {
         byte[] request = JsonSerializer.SerializeToUtf8Bytes(new
@@ -389,7 +397,7 @@ internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
             using (message)
             {
                 JsonElement root = message.RootElement;
-                CollectTraceEvents(root, traceEvents);
+                trace.Collect(root);
                 if (!root.TryGetProperty("id", out JsonElement responseId)
                     || responseId.GetInt32() != id)
                 {
@@ -414,38 +422,26 @@ internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
 
     private static async ValueTask ReceiveUntilTracingCompleteAsync(
         ClientWebSocket socket,
-        List<JsonElement> traceEvents,
+        TraceCollector trace,
         CancellationToken cancellationToken)
     {
+        if (trace.IsComplete)
+        {
+            return;
+        }
+
         while (true)
         {
             using JsonDocument message = await ReceiveMessageAsync(
                 socket,
                 cancellationToken);
             JsonElement root = message.RootElement;
-            CollectTraceEvents(root, traceEvents);
-            if (root.TryGetProperty("method", out JsonElement method)
-                && method.GetString() == "Tracing.tracingComplete")
+            trace.Collect(root);
+            if (trace.IsComplete)
             {
                 return;
             }
         }
-    }
-
-    private static void CollectTraceEvents(
-        JsonElement message,
-        List<JsonElement> traceEvents)
-    {
-        if (!message.TryGetProperty("method", out JsonElement method)
-            || method.GetString() != "Tracing.dataCollected"
-            || !message.TryGetProperty("params", out JsonElement parameters)
-            || !parameters.TryGetProperty("value", out JsonElement values)
-            || values.ValueKind != JsonValueKind.Array)
-        {
-            return;
-        }
-
-        traceEvents.AddRange(values.EnumerateArray().Select(value => value.Clone()));
     }
 
     private static async ValueTask<JsonDocument> ReceiveMessageAsync(
@@ -526,6 +522,50 @@ internal sealed class CdpRendererSessionClient : ICdpRendererSessionClient
             throw new InvalidOperationException(
                 "CDP enrichment only connects to validated loopback "
                     + "/devtools/ WebSocket endpoints.");
+        }
+    }
+
+    private sealed class TraceCollector(int maximumEventCount)
+    {
+        private readonly List<JsonElement> _events = [];
+
+        public List<JsonElement> Events => _events;
+
+        public bool IsComplete { get; private set; }
+
+        public bool IsTruncated { get; private set; }
+
+        public void Collect(JsonElement message)
+        {
+            if (!message.TryGetProperty("method", out JsonElement method))
+            {
+                return;
+            }
+
+            if (method.GetString() == "Tracing.tracingComplete")
+            {
+                IsComplete = true;
+                return;
+            }
+
+            if (method.GetString() != "Tracing.dataCollected"
+                || !message.TryGetProperty("params", out JsonElement parameters)
+                || !parameters.TryGetProperty("value", out JsonElement values)
+                || values.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (JsonElement value in values.EnumerateArray())
+            {
+                if (_events.Count >= maximumEventCount)
+                {
+                    IsTruncated = true;
+                    return;
+                }
+
+                _events.Add(value.Clone());
+            }
         }
     }
 }
