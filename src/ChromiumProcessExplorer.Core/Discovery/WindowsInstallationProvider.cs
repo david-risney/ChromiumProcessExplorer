@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace ChromiumProcessExplorer.Core.Discovery;
 
@@ -66,18 +67,39 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
     ];
 
     private readonly WindowsInstallationDiscoveryOptions _options;
+    private readonly IInstalledProgramProvider _installedProgramProvider;
+    private readonly IWindowsPackageInstallationProvider _packageProvider;
 
     /// <summary>Creates a provider using default Windows search roots.</summary>
     public WindowsInstallationProvider(
         WindowsInstallationDiscoveryOptions? options = null)
+        : this(
+            options,
+            new WindowsInstalledProgramProvider(),
+            new WindowsPackageInstallationProvider())
     {
+    }
+
+    /// <summary>Creates a provider using custom registry and package sources.</summary>
+    public WindowsInstallationProvider(
+        WindowsInstallationDiscoveryOptions? options,
+        IInstalledProgramProvider installedProgramProvider,
+        IWindowsPackageInstallationProvider packageProvider)
+    {
+        ArgumentNullException.ThrowIfNull(installedProgramProvider);
+        ArgumentNullException.ThrowIfNull(packageProvider);
         _options = options ?? new WindowsInstallationDiscoveryOptions();
+        _installedProgramProvider = installedProgramProvider;
+        _packageProvider = packageProvider;
         if (_options.MaximumDepth < 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(options),
                 "MaximumDepth must be non-negative.");
         }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+            _options.MaximumDirectories);
     }
 
     /// <inheritdoc />
@@ -126,6 +148,28 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             counters,
             cancellationToken);
 
+        if (_options.IncludeRegistry)
+        {
+            IReadOnlyList<InstalledProgramRecord> registryRecords =
+                _installedProgramProvider.Discover(issues, cancellationToken);
+            counters.RegistryRecordCount = registryRecords.Count;
+            DiscoverRegisteredApplications(
+                registryRecords,
+                installations,
+                cancellationToken);
+        }
+
+        if (_options.IncludePackages)
+        {
+            IReadOnlyList<WindowsPackageInstallation> packages =
+                _packageProvider.Discover(
+                    runningProcesses,
+                    issues,
+                    cancellationToken);
+            counters.PackageCount = packages.Count;
+            DiscoverPackages(packages, installations);
+        }
+
         ChromiumInstallation[] results = installations.Values
             .Select(builder => builder.Build())
             .OrderBy(installation => installation.Kind, StringComparer.OrdinalIgnoreCase)
@@ -144,8 +188,129 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 counters.RunningProcessCount,
                 counters.InaccessibleDirectoryCount,
                 counters.TruncatedDirectoryCount,
+                counters.RegistryRecordCount,
+                counters.PackageCount,
                 stopwatch.Elapsed),
             issues);
+    }
+
+    private static void DiscoverRegisteredApplications(
+        IEnumerable<InstalledProgramRecord> records,
+        Dictionary<string, InstallationBuilder> installations,
+        CancellationToken cancellationToken)
+    {
+        foreach (InstalledProgramRecord record in records)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? executablePath = GetRegisteredExecutable(record);
+            string? installPath = GetRegisteredInstallPath(record, executablePath);
+            if (installPath is null)
+            {
+                continue;
+            }
+
+            string normalizedPath = NormalizePath(installPath);
+            InstallationBuilder builder;
+            builder = executablePath is null
+                ? null!
+                : installations.Values.FirstOrDefault(existing =>
+                    existing.ExecutablePath is not null
+                    && PathsEqual(existing.ExecutablePath, executablePath))!;
+            if (builder is null
+                && !installations.TryGetValue(normalizedPath, out builder!))
+            {
+                if (!TryClassifyRegisteredProgram(
+                    record,
+                    executablePath,
+                    installPath,
+                    out (string Kind, string Platform, string Name) identity))
+                {
+                    continue;
+                }
+
+                builder = GetOrCreate(
+                    installations,
+                    installPath,
+                    identity.Name,
+                    identity.Kind,
+                    identity.Platform);
+            }
+            else
+            {
+                builder.RefineName(record.DisplayName);
+                if (TryClassifyRegisteredProgram(
+                    record,
+                    executablePath,
+                    installPath,
+                    out (string Kind, string Platform, string Name) identity))
+                {
+                    builder.RefineIdentity(
+                        identity.Name,
+                        identity.Kind,
+                        identity.Platform);
+                }
+            }
+            if (executablePath is not null)
+            {
+                builder.SetExecutable(executablePath);
+            }
+
+            builder.SetChannel(builder.Kind == "Browser"
+                ? InferChannel($"{record.DisplayName} {installPath}")
+                : null);
+            builder.SetRegisteredMetadata(record);
+            builder.AddEvidence(new InstallationEvidence(
+                "uninstall-registry",
+                $"{record.Scope}/{record.RegistryView} uninstall record "
+                    + $"({GetInstallType(record)}); version "
+                    + $"{record.DisplayVersion ?? "unknown"}; publisher "
+                    + $"{record.Publisher ?? "unknown"}.",
+                record.RegistryPath));
+        }
+    }
+
+    private static void DiscoverPackages(
+        IEnumerable<WindowsPackageInstallation> packages,
+        Dictionary<string, InstallationBuilder> installations)
+    {
+        foreach (WindowsPackageInstallation package in packages)
+        {
+            string kind = package.Platform == "WebView2"
+                ? "Runtime"
+                : package.Platform is "Edge" or "Chrome" or "Brave"
+                    ? "Browser"
+                    : "Application";
+            InstallationBuilder builder = installations.Values.FirstOrDefault(
+                    existing => existing.Platform.Equals(
+                            package.Platform,
+                            StringComparison.OrdinalIgnoreCase)
+                        && IsSameOrChildPath(
+                            existing.InstallPath,
+                            package.InstallPath))
+                ?? GetOrCreate(
+                    installations,
+                    package.InstallPath,
+                    package.DisplayName,
+                    kind,
+                    package.Platform);
+            builder.RefineIdentity(
+                package.DisplayName,
+                kind,
+                package.Platform);
+            if (package.ExecutablePath is not null)
+            {
+                builder.SetExecutable(package.ExecutablePath);
+            }
+
+            builder.SetPackageMetadata(package);
+            builder.SetChannel(kind == "Browser"
+                ? InferChannel(package.DisplayName)
+                : null);
+            foreach (InstallationEvidence evidence in package.Evidence)
+            {
+                builder.AddEvidence(evidence);
+            }
+        }
     }
 
     private static void DiscoverKnownLocations(
@@ -189,6 +354,11 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                             spec.Platform);
                         builder.SetExecutable(executablePath);
                         builder.SetChannel(spec.Channel);
+                        builder.SetDiscoveryMetadata(
+                            "KnownLocation",
+                            "Well-known Windows installation path",
+                            spec.Kind == "Runtime" ? true : null,
+                            "High");
                         builder.AddEvidence(new InstallationEvidence(
                             "known-location",
                             $"{spec.Name} executable found in a well-known installation location.",
@@ -225,6 +395,12 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         while (pending.TryDequeue(out (string Path, int Depth) current))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (counters.DirectoryCount >= _options.MaximumDirectories)
+            {
+                counters.TruncatedDirectoryCount += pending.Count + 1;
+                return;
+            }
+
             counters.DirectoryCount++;
 
             string[] files;
@@ -307,10 +483,14 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         string searchRoot,
         Dictionary<string, InstallationBuilder> installations)
     {
-        string installPath = FindApplicationRoot(
+        string? installPath = FindApplicationRoot(
             markerDirectory,
             siblingFiles,
             searchRoot);
+        if (installPath is null)
+        {
+            return;
+        }
         string[] markerNames = markerFiles
             .Select(file => Path.GetFileName(file)!)
             .Order(StringComparer.OrdinalIgnoreCase)
@@ -342,6 +522,17 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         {
             builder.SetExecutable(executablePath);
         }
+        builder.SetDiscoveryMetadata(
+            "Portable",
+            "Filesystem marker scan",
+            platform switch
+            {
+                "Electron" or "CEF" or "NW.js" or "Qt WebEngine" => false,
+                "WebView2" => null,
+                _ => null,
+            },
+            executablePath is null ? "Low" : "Medium");
+        builder.SetLayoutPaths(markerFiles);
 
         foreach (string markerFile in markerFiles)
         {
@@ -384,6 +575,15 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 platform);
             builder.SetExecutable(executablePath);
             builder.SetChannel(channel);
+            builder.SetDiscoveryMetadata(
+                "Portable",
+                "Running process executable",
+                kind == "Runtime"
+                    ? true
+                    : platform is "Electron" or "CEF"
+                        ? false
+                        : null,
+                "High");
             builder.AddEvidence(new InstallationEvidence(
                 "running-process",
                 processGroup.Length == 1
@@ -460,7 +660,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         }
     }
 
-    private static string FindApplicationRoot(
+    private static string? FindApplicationRoot(
         string markerDirectory,
         IReadOnlyList<string> siblingFiles,
         string searchRoot)
@@ -496,7 +696,22 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             current = parent.FullName;
         }
 
-        return markerDirectory;
+        return IsDependencyOrSdkPath(markerDirectory)
+            ? null
+            : markerDirectory;
+    }
+
+    private static bool IsDependencyOrSdkPath(string path)
+    {
+        return path.Split(
+                Path.DirectorySeparatorChar,
+                StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => segment.Equals("sdk", StringComparison.OrdinalIgnoreCase)
+                || segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
+                || segment.Equals("packages", StringComparison.OrdinalIgnoreCase)
+                || segment.Equals(".nuget", StringComparison.OrdinalIgnoreCase)
+                || segment.Equals("runtimes", StringComparison.OrdinalIgnoreCase)
+                || segment.Equals("native", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string? FindPreferredExecutable(string installPath)
@@ -562,6 +777,261 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         }
 
         return ("Chromium", GetDirectoryName(installPath, "Chromium application"));
+    }
+
+    private static string? GetRegisteredExecutable(InstalledProgramRecord record)
+    {
+        if (!string.IsNullOrWhiteSpace(record.DisplayIconPath)
+            && File.Exists(record.DisplayIconPath))
+        {
+            return Path.GetFullPath(record.DisplayIconPath);
+        }
+
+        if (string.IsNullOrWhiteSpace(record.InstallLocation)
+            || !Directory.Exists(record.InstallLocation))
+        {
+            return null;
+        }
+
+        string? knownName = record.DisplayName.Contains(
+            "WebView2",
+            StringComparison.OrdinalIgnoreCase)
+            ? "msedgewebview2.exe"
+            : record.DisplayName.Contains("Edge", StringComparison.OrdinalIgnoreCase)
+                ? "msedge.exe"
+                : record.DisplayName.Contains(
+                    "Chrome",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? "chrome.exe"
+                    : null;
+        if (knownName is not null)
+        {
+            try
+            {
+                return FindExecutables(
+                    record.InstallLocation,
+                    knownName,
+                    3,
+                    CancellationToken.None).FirstOrDefault();
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                or UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        return FindPreferredExecutable(record.InstallLocation);
+    }
+
+    private static string? GetRegisteredInstallPath(
+        InstalledProgramRecord record,
+        string? executablePath)
+    {
+        if (!string.IsNullOrWhiteSpace(record.InstallLocation))
+        {
+            try
+            {
+                return Path.GetFullPath(record.InstallLocation);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException
+                or NotSupportedException
+                or PathTooLongException)
+            {
+                return null;
+            }
+        }
+
+        return executablePath is null
+            ? null
+            : Path.GetDirectoryName(executablePath);
+    }
+
+    private static bool TryClassifyRegisteredProgram(
+        InstalledProgramRecord record,
+        string? executablePath,
+        string installPath,
+        out (string Kind, string Platform, string Name) identity)
+    {
+        string name = record.DisplayName;
+        if (name.Contains(
+            "WebView2 Runtime",
+            StringComparison.OrdinalIgnoreCase))
+        {
+            identity = ("Runtime", "WebView2", name);
+            return true;
+        }
+
+        if (TryClassifyKnownBrowserName(name, out string browserPlatform))
+        {
+            identity = ("Browser", browserPlatform, name);
+            return true;
+        }
+
+        if (executablePath is not null)
+        {
+            (string kind, string platform, _, _) =
+                ClassifyExecutable(executablePath);
+            if (platform != "Chromium")
+            {
+                identity = (kind, platform, name);
+                return true;
+            }
+        }
+
+        string installType = GetInstallType(record);
+        bool warrantsLayoutInspection = installType is "Squirrel" or "NSIS"
+            || name.Contains("CEF", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Electron", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("WebView", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Chromium", StringComparison.OrdinalIgnoreCase);
+        if (!warrantsLayoutInspection)
+        {
+            identity = default;
+            return false;
+        }
+
+        string? markerPlatform = ClassifyApplicationLayout(installPath);
+        if (markerPlatform is not null)
+        {
+            identity = ("Application", markerPlatform, name);
+            return true;
+        }
+
+        identity = default;
+        return false;
+    }
+
+    private static bool TryClassifyKnownBrowserName(
+        string displayName,
+        out string platform)
+    {
+        foreach ((string BaseName, string Platform, string[] Channels) candidate
+            in new[]
+            {
+                ("Google Chrome", "Chrome", new[] { "Beta", "Dev", "Canary" }),
+                ("Microsoft Edge", "Edge", new[] { "Beta", "Dev", "Canary", "Internal" }),
+                ("Brave", "Brave", new[] { "Beta", "Nightly" }),
+                ("Vivaldi", "Vivaldi", Array.Empty<string>()),
+                ("Opera", "Opera", new[] { "Stable", "beta", "developer", "GX" }),
+                ("Chromium", "Chromium", Array.Empty<string>()),
+            })
+        {
+            if (displayName.Equals(
+                    candidate.BaseName,
+                    StringComparison.OrdinalIgnoreCase)
+                || candidate.Channels.Any(channel => displayName.Equals(
+                    $"{candidate.BaseName} {channel}",
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                platform = candidate.Platform;
+                return true;
+            }
+        }
+
+        platform = null!;
+        return false;
+    }
+
+    private static string? ClassifyApplicationLayout(string installPath)
+    {
+        try
+        {
+            if (File.Exists(Path.Combine(installPath, "resources", "app.asar"))
+                || File.Exists(Path.Combine(installPath, "app.asar")))
+            {
+                return "Electron";
+            }
+
+            if (FindFileWithinDepth(installPath, "libcef.dll", 3) is not null)
+            {
+                return "CEF";
+            }
+
+            if (FindFileWithinDepth(installPath, "WebView2Loader.dll", 4) is not null
+                || FindFileWithinDepth(
+                    installPath,
+                    "Microsoft.Web.WebView2.Core.dll",
+                    4) is not null)
+            {
+                return "WebView2";
+            }
+
+            if (FindFileWithinDepth(installPath, "nw.dll", 3) is not null)
+            {
+                return "NW.js";
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static string? FindFileWithinDepth(
+        string root,
+        string fileName,
+        int maximumDepth)
+    {
+        Queue<(string Path, int Depth)> pending = new();
+        pending.Enqueue((root, 0));
+        while (pending.TryDequeue(out (string Path, int Depth) current))
+        {
+            string candidate = Path.Combine(current.Path, fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            if (current.Depth >= maximumDepth)
+            {
+                continue;
+            }
+
+            foreach (string child in Directory.GetDirectories(current.Path))
+            {
+                if (!File.GetAttributes(child).HasFlag(FileAttributes.ReparsePoint))
+                {
+                    pending.Enqueue((child, current.Depth + 1));
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string GetInstallType(InstalledProgramRecord record)
+    {
+        if (record.IsWindowsInstaller)
+        {
+            return "MSI";
+        }
+
+        string uninstall = record.UninstallString ?? string.Empty;
+        if (uninstall.Contains("Update.exe", StringComparison.OrdinalIgnoreCase)
+            && uninstall.Contains(
+                "--uninstall",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "Squirrel";
+        }
+
+        if (Regex.IsMatch(
+                uninstall,
+                @"(?:^|[\\/""\s])unins\d*\.exe(?:$|[""\s])",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            || uninstall.Contains("NSIS", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NSIS";
+        }
+
+        return "Registry";
     }
 
     private static (string Kind, string Platform, string Name, string? Channel)
@@ -661,6 +1131,11 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             return "Dev";
         }
 
+        if (path.Contains("Internal", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Internal";
+        }
+
         return "Stable";
     }
 
@@ -671,8 +1146,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         string kind,
         string platform)
     {
-        string normalizedPath = Path.GetFullPath(installPath)
-            .TrimEnd(Path.DirectorySeparatorChar);
+        string normalizedPath = NormalizePath(installPath);
         if (!installations.TryGetValue(normalizedPath, out InstallationBuilder? builder))
         {
             builder = new InstallationBuilder(
@@ -688,6 +1162,11 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         }
 
         return builder;
+    }
+
+    private static string NormalizePath(string path)
+    {
+        return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
     }
 
     private static bool IsSameOrChildPath(string candidate, string parent)
@@ -732,6 +1211,51 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         }
     }
 
+    private static string? GetPortableExecutableArchitecture(string path)
+    {
+        try
+        {
+            using FileStream stream = new(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using BinaryReader reader = new(stream);
+            if (stream.Length < 64 || reader.ReadUInt16() != 0x5A4D)
+            {
+                return null;
+            }
+
+            stream.Position = 0x3C;
+            int peOffset = reader.ReadInt32();
+            if (peOffset < 0 || peOffset + 6 > stream.Length)
+            {
+                return null;
+            }
+
+            stream.Position = peOffset;
+            if (reader.ReadUInt32() != 0x00004550)
+            {
+                return null;
+            }
+
+            return reader.ReadUInt16() switch
+            {
+                0x014c => "x86",
+                0x8664 => "x64",
+                0xAA64 => "arm64",
+                _ => null,
+            };
+        }
+        catch (Exception exception) when (
+            exception is FileNotFoundException
+            or IOException
+            or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private sealed record KnownInstallSpec(
         string Name,
         string Kind,
@@ -754,6 +1278,10 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         public int TruncatedDirectoryCount { get; set; }
 
         public int ReportedAccessIssueCount { get; set; }
+
+        public int RegistryRecordCount { get; set; }
+
+        public int PackageCount { get; set; }
     }
 
     private sealed class InstallationBuilder
@@ -764,6 +1292,15 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         private string _platform;
         private string? _executablePath;
         private string? _channel;
+        private string? _registeredVersion;
+        private string? _publisher;
+        private string _installType = "Portable";
+        private string? _installSource = "Filesystem discovery";
+        private InstallationPackageIdentity? _packageIdentity;
+        private string? _resourcesPath;
+        private string? _runtimePath;
+        private bool? _isSharedRuntime;
+        private string _confidence = "Low";
 
         public InstallationBuilder(
             string installPath,
@@ -781,6 +1318,10 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
         public string Kind => _kind;
 
+        public string Platform => _platform;
+
+        public string? ExecutablePath => _executablePath;
+
         public void RefineIdentity(string name, string kind, string platform)
         {
             if (GetSpecificity(kind, platform) > GetSpecificity(_kind, _platform))
@@ -788,6 +1329,14 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 _name = name;
                 _kind = kind;
                 _platform = platform;
+            }
+        }
+
+        public void RefineName(string name)
+        {
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                _name = name;
             }
         }
 
@@ -801,6 +1350,66 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             _channel ??= channel;
         }
 
+        public void SetRegisteredMetadata(InstalledProgramRecord record)
+        {
+            _registeredVersion ??= record.DisplayVersion;
+            _publisher ??= record.Publisher;
+            SetInstallIdentity(
+                GetInstallType(record),
+                string.IsNullOrWhiteSpace(record.InstallSource)
+                    ? record.RegistryPath
+                    : record.InstallSource);
+            RaiseConfidence("High");
+        }
+
+        public void SetPackageMetadata(WindowsPackageInstallation package)
+        {
+            _registeredVersion ??= package.Identity.Version;
+            _publisher ??= package.Publisher;
+            _packageIdentity ??= package.Identity;
+            _resourcesPath ??= package.ResourcesPath;
+            _runtimePath ??= package.RuntimePath;
+            _isSharedRuntime ??= package.IsSharedRuntime;
+            SetInstallIdentity("MSIX/AppX", "Windows package");
+            RaiseConfidence("High");
+        }
+
+        public void SetDiscoveryMetadata(
+            string installType,
+            string installSource,
+            bool? isSharedRuntime,
+            string confidence)
+        {
+            SetInstallIdentity(installType, installSource);
+            _isSharedRuntime ??= isSharedRuntime;
+            RaiseConfidence(confidence);
+        }
+
+        public void SetLayoutPaths(IEnumerable<string> markerFiles)
+        {
+            foreach (string markerFile in markerFiles)
+            {
+                string fileName = Path.GetFileName(markerFile);
+                if (fileName.Equals("app.asar", StringComparison.OrdinalIgnoreCase))
+                {
+                    _resourcesPath ??= Path.GetDirectoryName(markerFile);
+                    _runtimePath ??= _executablePath;
+                }
+                else if (fileName.Equals("libcef.dll", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Equals("nw.dll", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Equals(
+                        "WebView2Loader.dll",
+                        StringComparison.OrdinalIgnoreCase)
+                    || fileName.Equals(
+                        "Microsoft.Web.WebView2.Core.dll",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    _runtimePath ??= markerFile;
+                    _resourcesPath ??= Path.GetDirectoryName(markerFile);
+                }
+            }
+        }
+
         public void AddEvidence(InstallationEvidence evidence)
         {
             if (!_evidence.Contains(evidence))
@@ -811,9 +1420,38 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
         public ChromiumInstallation Build()
         {
-            string? version = _executablePath is null
-                ? null
-                : GetVersion(_executablePath);
+            (string? fileVersion, string? filePublisher) = _executablePath is null
+                ? (null, null)
+                : GetVersionAndPublisher(_executablePath);
+            string? version = fileVersion ?? _registeredVersion;
+            string? versionProvenance = fileVersion is not null
+                ? "Executable version resource"
+                : _packageIdentity?.Version is not null
+                    ? "Package identity"
+                    : _registeredVersion is not null
+                        ? "Uninstall registry"
+                        : null;
+            string? architecture = _executablePath is null
+                ? _packageIdentity?.Architecture
+                : GetPortableExecutableArchitecture(_executablePath)
+                    ?? _packageIdentity?.Architecture;
+            string? resourcesPath = _resourcesPath;
+            string? runtimePath = _runtimePath;
+            if (_platform == "Electron" && _executablePath is not null)
+            {
+                resourcesPath ??= Path.Combine(
+                    Path.GetDirectoryName(_executablePath)!,
+                    "resources");
+                runtimePath ??= _executablePath;
+            }
+            else if (_kind is "Browser" or "Runtime")
+            {
+                runtimePath ??= _executablePath;
+                resourcesPath ??= _executablePath is null
+                    ? null
+                    : Path.GetDirectoryName(_executablePath);
+            }
+
             return new ChromiumInstallation(
                 _name,
                 _kind,
@@ -822,10 +1460,64 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 _executablePath,
                 version,
                 _channel,
+                new InstallationMetadata(
+                    architecture,
+                    filePublisher ?? _publisher,
+                    _installType,
+                    _installSource,
+                    versionProvenance,
+                    _packageIdentity,
+                    resourcesPath,
+                    runtimePath,
+                    _isSharedRuntime,
+                    _confidence),
                 _evidence
                     .OrderBy(item => item.Source, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
                     .ToArray());
+        }
+
+        private void SetInstallIdentity(string installType, string installSource)
+        {
+            if (GetInstallTypePriority(installType)
+                <= GetInstallTypePriority(_installType))
+            {
+                return;
+            }
+
+            _installType = installType;
+            _installSource = installSource;
+        }
+
+        private void RaiseConfidence(string confidence)
+        {
+            if (GetConfidenceScore(confidence) > GetConfidenceScore(_confidence))
+            {
+                _confidence = confidence;
+            }
+        }
+
+        private static int GetInstallTypePriority(string installType)
+        {
+            return installType switch
+            {
+                "MSIX/AppX" => 100,
+                "MSI" or "Squirrel" or "NSIS" => 95,
+                "Registry" => 90,
+                "KnownLocation" => 70,
+                "Portable" => 40,
+                _ => 0,
+            };
+        }
+
+        private static int GetConfidenceScore(string confidence)
+        {
+            return confidence switch
+            {
+                "High" => 30,
+                "Medium" => 20,
+                _ => 10,
+            };
         }
 
         private static int GetSpecificity(string kind, string platform)
@@ -840,19 +1532,22 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             return kindScore + platformScore;
         }
 
-        private static string? GetVersion(string path)
+        private static (string? Version, string? Publisher) GetVersionAndPublisher(
+            string path)
         {
             try
             {
                 FileVersionInfo info = FileVersionInfo.GetVersionInfo(path);
-                return info.ProductVersion ?? info.FileVersion;
+                return (
+                    info.ProductVersion ?? info.FileVersion,
+                    info.CompanyName);
             }
             catch (Exception exception) when (
                 exception is FileNotFoundException
                     or IOException
                     or UnauthorizedAccessException)
             {
-                return null;
+                return (null, null);
             }
         }
     }

@@ -109,16 +109,28 @@ continues with partial results. The footer identifies each timed-out handle's
 owner, value, access mask, blocked query stage, and elapsed time; JSON exposes
 the same data in `TimedOutQueries`. Administrator access improves coverage.
 
-`installations` combines three evidence sources:
+`installations` combines five evidence sources:
 
 - well-known Chromium browser and WebView2 runtime locations;
+- per-machine and per-user uninstall registrations from both registry views;
+- accessible MSIX/AppX package roots and WindowsApps identity;
 - bounded scans of Program Files and per-user application folders for markers
   such as `libcef.dll`, `WebView2Loader.dll`, `app.asar`, `nw.dll`, and Qt
   WebEngine libraries; and
 - executable folders represented by currently running Chromium processes.
 
 Records retain their evidence and report inaccessible or depth-limited
-directories rather than silently presenting the scan as complete.
+directories rather than silently presenting the scan as complete. Metadata
+includes install type (MSI, Squirrel, NSIS, MSIX/AppX, known location, or
+portable), publisher, package identity, PE/package architecture, version
+provenance, resources/runtime paths, confidence, and shared-versus-app-local
+runtime evidence. Nested dependency/SDK markers are normalized to an
+application executable root when possible and are not promoted to standalone
+applications without application evidence. Explicit search roots and maximum
+depth remain configurable, and scans stop after 50,000 directories by default;
+explicit-root scans omit registry/package sources unless those options are
+enabled. A WebView2 loader marker alone leaves runtime scope unknown because it
+can select either Evergreen/shared or fixed/app-local deployment.
 
 `cdp` parses remote-debugging switches on browser processes, resolves ephemeral
 ports through `DevToolsActivePort`, and validates loopback endpoints through a

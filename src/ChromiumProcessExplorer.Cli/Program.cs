@@ -216,6 +216,48 @@ internal static class CliApplication
                 Console.WriteLine(
                     $"  {installation.Name}{version}{channel} ({installation.Platform})");
                 Console.WriteLine($"    {installation.InstallPath}");
+                InstallationMetadata metadata = installation.Metadata;
+                Console.WriteLine(
+                    $"    install: {metadata.InstallType}; "
+                    + $"confidence: {metadata.Confidence}");
+                if (metadata.Architecture is not null
+                    || metadata.Publisher is not null)
+                {
+                    Console.WriteLine(
+                        $"    architecture: {metadata.Architecture ?? "unknown"}; "
+                        + $"publisher: {metadata.Publisher ?? "unknown"}");
+                }
+
+                if (metadata.VersionProvenance is not null)
+                {
+                    Console.WriteLine(
+                        $"    version source: {metadata.VersionProvenance}");
+                }
+
+                if (metadata.PackageIdentity is not null)
+                {
+                    Console.WriteLine(
+                        $"    package: {metadata.PackageIdentity.PackageFullName}");
+                }
+
+                if (metadata.ResourcesPath is not null)
+                {
+                    Console.WriteLine(
+                        $"    resources: {metadata.ResourcesPath}");
+                }
+
+                if (metadata.RuntimePath is not null)
+                {
+                    Console.WriteLine($"    runtime: {metadata.RuntimePath}");
+                }
+
+                if (metadata.IsSharedRuntime is bool isSharedRuntime)
+                {
+                    Console.WriteLine(
+                        $"    runtime scope: "
+                        + $"{(isSharedRuntime ? "shared" : "app-local")}");
+                }
+
                 foreach (InstallationEvidence evidence in installation.Evidence)
                 {
                     string process = evidence.ProcessId is int processId
@@ -235,7 +277,9 @@ internal static class CliApplication
             + $"{statistics.SearchRootCount} roots in "
             + $"{statistics.Elapsed.TotalMilliseconds:F0} ms; found "
             + $"{statistics.MarkerFileCount} marker files and considered "
-            + $"{statistics.RunningProcessCount} running Chromium processes.");
+            + $"{statistics.RunningProcessCount} running Chromium processes, "
+            + $"{statistics.RegistryRecordCount} uninstall records, and "
+            + $"{statistics.PackageCount} packages.");
         if (statistics.InaccessibleDirectoryCount > 0
             || statistics.TruncatedDirectoryCount > 0)
         {
