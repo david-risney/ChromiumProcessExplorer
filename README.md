@@ -6,10 +6,9 @@ brings process relationships, Chromium process roles, logs, launch parameters,
 installation details, and executable metadata into one place.
 
 > [!NOTE]
-> This project is in early development. The first implementation provides a
-> reusable .NET discovery library and CLI for Windows process trees, Chromium
-> process-role classification, Mojo named-pipe discovery, and installation
-> discovery.
+> This project is in early development. The solution provides a reusable .NET
+> discovery library, CLI, Windows GUI, privileged broker, and Copilot MCP
+> bridge.
 
 ## Current implementation
 
@@ -19,11 +18,13 @@ The solution targets .NET 9 on Windows and contains:
   command-line parsing, typed process-graph and generation-safe process-tree
   construction, CEF, WebView2, and Electron runtime analysis, optional HWND
   topology, and Mojo pipe and installation enumeration. The public APIs can be
-  consumed by the CLI, a future GUI, or other .NET applications.
+  consumed by the CLI, GUI, or other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
+- **ChromiumProcessExplorer** - a WPF frontend for process graph/tree,
+  process details, Mojo/CDP evidence, installations, issues, and JSON export.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
-  parsing, Mojo pipe recognition, process-tree generation, and CEF runtime
-  analysis.
+  parsing, discovery, graph construction, runtime adapters, broker/MCP
+  contracts, and GUI view-model behavior.
 
 Discovery takes one process snapshot, enriches process metadata with bounded
 parallelism, and validates parent relationships with process creation times
@@ -111,6 +112,18 @@ the helper is terminated and replaced after a timeout so the main process
 continues with partial results. The footer identifies each timed-out handle's
 owner, value, access mask, blocked query stage, and elapsed time; JSON exposes
 the same data in `TimedOutQueries`. Administrator access improves coverage.
+
+### Windows GUI
+
+```powershell
+dotnet run --project src\ChromiumProcessExplorer.Gui
+```
+
+The WPF frontend refreshes process and relationship data asynchronously,
+retains stale/exited process generations, displays OS-parent and logical edges
+separately with evidence and confidence, and exposes process details, Mojo,
+CDP, installations, partial-coverage issues, broker status, cancellation, and
+JSON export. All discovery is performed through public Core APIs.
 
 `installations` combines five evidence sources:
 
@@ -278,8 +291,8 @@ Features are designed to be exposed through two executables backed by shared
 
 - **CLI** - currently supports terminal use, scripting, automation, and
   structured output.
-- **GUI** - planned interactive process-tree, diagnostics, and installation
-  views.
+- **GUI** - provides interactive process graph/tree, details, Mojo/CDP,
+  installation, issue, and JSON views with refresh and cancellation.
 
 The repository includes a Copilot skill and typed stdio MCP bridge. Copilot
 remains unelevated and can call only the broker's fixed, read-only, redacted
@@ -304,7 +317,8 @@ host/browser associations are exposed. WebView2 loaded-module and optional
 generation-safe HWND evidence are also exposed without changing the strict OS
 parent tree. Electron packaged/development layouts, process roles, application
 and runtime paths, Windows package identity, and main/child associations are
-also exposed. Logging diagnostics, packaging, and the GUI remain planned work.
+also exposed. Passive logging diagnostics and the Windows GUI are implemented;
+packaging remains planned work.
 
 Open design investigations include:
 
