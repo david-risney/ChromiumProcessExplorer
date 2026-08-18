@@ -1,0 +1,70 @@
+using ChromiumProcessExplorer.Core.Broker;
+using ChromiumProcessExplorer.Core.Discovery;
+
+namespace ChromiumProcessExplorer.Gui;
+
+public interface IGuiDiscoveryService
+{
+    ValueTask<ChromiumDiscoveryResult> DiscoverProcessesAsync(
+        CancellationToken cancellationToken);
+
+    ValueTask<ProcessDetailsResult> DiscoverProcessDetailsAsync(
+        int processId,
+        CancellationToken cancellationToken);
+
+    ValueTask<InstallationDiscoveryResult> DiscoverInstallationsAsync(
+        CancellationToken cancellationToken);
+
+    ValueTask<BrokerResponse> ProbeBrokerAsync(
+        CancellationToken cancellationToken);
+}
+
+public sealed class GuiDiscoveryService : IGuiDiscoveryService
+{
+    private readonly ChromiumProcessDiscovery _discovery = new();
+    private readonly string _workerPath;
+
+    public GuiDiscoveryService(string workerPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerPath);
+        _workerPath = workerPath;
+    }
+
+    public async ValueTask<ChromiumDiscoveryResult> DiscoverProcessesAsync(
+        CancellationToken cancellationToken)
+    {
+        return await _discovery.DiscoverAsync(
+            new HandleQueryWorkerOptions(_workerPath, 0),
+            includeWindowEvidence: true,
+            maximumProcessConcurrency: null,
+            cancellationToken: cancellationToken);
+    }
+
+    public async ValueTask<ProcessDetailsResult> DiscoverProcessDetailsAsync(
+        int processId,
+        CancellationToken cancellationToken)
+    {
+        return await _discovery.DiscoverProcessDetailsAsync(
+            processId,
+            includeSensitiveValues: false,
+            cancellationToken: cancellationToken);
+    }
+
+    public async ValueTask<InstallationDiscoveryResult> DiscoverInstallationsAsync(
+        CancellationToken cancellationToken)
+    {
+        return await _discovery.DiscoverInstallationsAsync(
+            cancellationToken: cancellationToken);
+    }
+
+    public async ValueTask<BrokerResponse> ProbeBrokerAsync(
+        CancellationToken cancellationToken)
+    {
+        ChromiumBrokerClient client = new(
+            BrokerServerOptions.CreateDefault().PipeName,
+            TimeSpan.FromSeconds(2));
+        return await client.SendAsync(
+            BrokerOperations.Probe,
+            cancellationToken: cancellationToken);
+    }
+}
