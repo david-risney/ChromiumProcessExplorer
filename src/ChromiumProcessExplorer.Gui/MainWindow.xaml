@@ -3,249 +3,746 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ChromiumProcessExplorer.Gui"
         Title="Chromium Process Explorer"
-        Width="1280"
-        Height="820"
-        MinWidth="900"
-        MinHeight="600">
-    <DockPanel>
-        <ToolBar DockPanel.Dock="Top">
-            <Button Click="RefreshProcesses_Click"
-                    Padding="10,3"
-                    Content="Refresh processes" />
-            <Button Click="RefreshInstallations_Click"
-                    Padding="10,3"
-                    Content="Scan installations" />
-            <Button Click="ProbeBroker_Click"
-                    Padding="10,3"
-                    Content="Check broker" />
-            <Button Click="Cancel_Click"
-                    Padding="10,3"
-                    Content="Cancel" />
-            <Separator />
-            <Button Click="Export_Click"
-                    Padding="10,3"
-                    Content="Export JSON" />
-        </ToolBar>
-
-        <StatusBar DockPanel.Dock="Bottom">
-            <StatusBarItem>
-                <TextBlock Text="{Binding Status}" />
-            </StatusBarItem>
-            <Separator />
-            <StatusBarItem>
-                <TextBlock Text="{Binding BrokerStatus, StringFormat=Broker: {0}}" />
-            </StatusBarItem>
-            <Separator />
-            <StatusBarItem>
-                <TextBlock Text="{Binding IsBusy, StringFormat=Busy: {0}}" />
-            </StatusBarItem>
-        </StatusBar>
-
-        <TabControl>
-            <TabItem Header="Process graph">
+        Width="1360"
+        Height="860"
+        MinWidth="980"
+        MinHeight="640"
+        Background="#FFF5F6F8">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibility" />
+        <Style x:Key="SectionCard" TargetType="GroupBox">
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="#FFD8DDE6" />
+        </Style>
+        <DataTemplate x:Key="PropertyRowTemplate" DataType="{x:Type local:PropertyRow}">
+            <Grid Margin="0,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="170" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock FontWeight="SemiBold" Text="{Binding Label}" />
+                <TextBox Grid.Column="1"
+                         Padding="0"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         IsReadOnly="True"
+                         Text="{Binding Value, Mode=OneWay}"
+                         TextWrapping="Wrap" />
+            </Grid>
+        </DataTemplate>
+        <Style TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="HeadersVisibility" Value="Column" />
+            <Setter Property="GridLinesVisibility" Value="Horizontal" />
+            <Setter Property="HorizontalGridLinesBrush" Value="#FFE1E5EB" />
+            <Setter Property="VerticalGridLinesBrush" Value="#FFE1E5EB" />
+            <Setter Property="BorderBrush" Value="#FFD8DDE6" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        </Style>
+        <DataTemplate x:Key="NoticeTemplate"
+                      DataType="{x:Type local:ContextIssueViewModel}">
+            <Border Margin="0,2,0,0"
+                    Padding="8,5"
+                    Background="#FFFFF7DF"
+                    BorderBrush="#FFE5C365"
+                    BorderThickness="1">
                 <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock VerticalAlignment="Center"
+                               Text="{Binding Message}"
+                               TextWrapping="Wrap" />
+                    <Button Grid.Column="1"
+                            Width="24"
+                            Height="24"
+                            Margin="8,0,0,0"
+                            Padding="0"
+                            Click="DismissNotice_Click"
+                            Tag="{Binding}"
+                            ToolTip="Dismiss this warning">
+                        <Path Width="10"
+                              Height="10"
+                              Data="M1,1 L9,9 M9,1 L1,9"
+                              Stroke="#FF5B6472"
+                              StrokeThickness="1.5"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round" />
+                    </Button>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+
+    <DockPanel>
+        <TabControl Margin="8">
+            <TabItem Header="Processes">
+                <Grid Margin="4">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="2*" />
-                        <RowDefinition Height="3*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <GroupBox Header="Processes (one row per process generation)"
-                              Margin="6">
-                        <DataGrid ItemsSource="{Binding Processes}"
-                                  SelectedItem="{Binding SelectedProcess}"
-                                  SelectionChanged="ProcessSelection_Changed"
-                                  AutoGenerateColumns="False"
-                                  IsReadOnly="True"
-                                  EnableRowVirtualization="True">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="PID"
-                                                    Binding="{Binding ProcessId}" />
-                                <DataGridTextColumn Header="Image"
-                                                    Binding="{Binding ImageName}"
-                                                    Width="2*" />
-                                <DataGridTextColumn Header="Role"
-                                                    Binding="{Binding Role}"
-                                                    Width="2*" />
-                                <DataGridTextColumn Header="Parent PID"
-                                                    Binding="{Binding ParentProcessId}" />
-                                <DataGridTextColumn Header="State"
-                                                    Binding="{Binding State}" />
-                                <DataGridTextColumn Header="Evidence"
-                                                    Binding="{Binding Evidence}"
-                                                    Width="4*" />
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </GroupBox>
-                    <GroupBox Grid.Row="1"
-                              Header="Typed relationships (logical edges do not duplicate nodes)"
-                              Margin="6">
-                        <DataGrid ItemsSource="{Binding Relationships}"
-                                  AutoGenerateColumns="False"
-                                  IsReadOnly="True"
-                                  EnableRowVirtualization="True">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="From"
-                                                    Binding="{Binding Source}"
-                                                    Width="*" />
-                                <DataGridTextColumn Header="From PID"
-                                                    Binding="{Binding SourceProcessId}" />
-                                <DataGridTextColumn Header="To"
-                                                    Binding="{Binding Target}"
-                                                    Width="*" />
-                                <DataGridTextColumn Header="To PID"
-                                                    Binding="{Binding TargetProcessId}" />
-                                <DataGridTextColumn Header="Relationship"
-                                                    Binding="{Binding Relationship}"
-                                                    Width="*" />
-                                <DataGridTextColumn Header="Edge class"
-                                                    Binding="{Binding EdgeClass}"
-                                                    Width="*" />
-                                <DataGridTextColumn Header="Confidence"
-                                                    Binding="{Binding Confidence}" />
-                                <DataGridTextColumn Header="Evidence"
-                                                    Binding="{Binding Evidence}"
-                                                    Width="3*" />
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </GroupBox>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="390" MinWidth="280" />
+                        <ColumnDefinition Width="5" />
+                        <ColumnDefinition Width="*" MinWidth="480" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.ColumnSpan="3"
+                            Margin="0,0,0,8"
+                            Padding="8"
+                            Background="White"
+                            BorderBrush="#FFD8DDE6"
+                            BorderThickness="1">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Left"
+                                        Orientation="Horizontal">
+                                <Button Click="RefreshProcesses_Click"
+                                        Padding="12,4"
+                                        Content="Refresh">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="IsEnabled" Value="True" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsProcessActivityBusy}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button Margin="6,0,0,0"
+                                        Click="CancelProcessRefresh_Click"
+                                        Padding="12,4"
+                                        Content="Cancel"
+                                        ToolTip="Stop the current process refresh">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="IsEnabled" Value="False" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsRefreshingProcesses}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="True" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <CheckBox Margin="12,0,0,0"
+                                          VerticalAlignment="Center"
+                                          Content="Auto refresh"
+                                          IsChecked="{Binding AutoRefreshProcesses}"
+                                          ToolTip="Poll Mojo pipe names and run a full refresh only when they change." />
+                                <ProgressBar Width="90"
+                                             Height="6"
+                                             Margin="10,0,0,0"
+                                             VerticalAlignment="Center"
+                                             IsIndeterminate="True">
+                                    <ProgressBar.Style>
+                                        <Style TargetType="ProgressBar">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsProcessActivityBusy}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ProgressBar.Style>
+                                </ProgressBar>
+                            </StackPanel>
+                            <TextBlock Margin="12,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="#FF5B6472"
+                                       Text="{Binding Status}" />
+                        </DockPanel>
+                    </Border>
+
+                    <Grid Grid.Row="1" Grid.Column="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Background="White"
+                                    BorderBrush="#FFB8C0CC"
+                                    BorderThickness="1"
+                                    CornerRadius="3">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="30" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Path Width="14"
+                                          Height="14"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          Data="M6.5,1 A5.5,5.5 0 1 0 6.5,12 A5.5,5.5 0 1 0 6.5,1 M10.5,10.5 L15,15"
+                                          Stroke="#FF7A8491"
+                                          StrokeThickness="1.5" />
+                                    <Grid Grid.Column="1">
+                                        <TextBlock Margin="1,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="#FF929AA5"
+                                                   IsHitTestVisible="False"
+                                                   Text="Filter processes">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ProcessFilter}" Value="">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBox Padding="0,5"
+                                                 BorderThickness="0"
+                                                 Background="Transparent"
+                                                 Text="{Binding ProcessFilter, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="Filter by process name, PID, platform, or role" />
+                                    </Grid>
+                                </Grid>
+                            </Border>
+                            <Button Grid.Column="1"
+                                    Margin="6,0,0,0"
+                                    Click="ToggleProcessExpansion_Click"
+                                    Padding="9,4"
+                                    Content="{Binding ProcessExpansionButtonText}" />
+                        </Grid>
+                        <TreeView Grid.Row="1"
+                                  ItemsSource="{Binding FilteredProcessRoots}"
+                                  SelectedItemChanged="ProcessTree_SelectedItemChanged"
+                                  Background="White"
+                                  BorderBrush="#FFD8DDE6">
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="TreeViewItem">
+                                    <Setter Property="IsExpanded"
+                                            Value="{Binding IsExpanded, Mode=TwoWay}" />
+                                    <Setter Property="IsSelected"
+                                            Value="{Binding IsSelected, Mode=TwoWay}" />
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                            <TreeView.Resources>
+                                <HierarchicalDataTemplate DataType="{x:Type local:ProcessTreeItemViewModel}"
+                                                          ItemsSource="{Binding Children}">
+                                    <Grid Margin="1">
+                                        <Grid.ContextMenu>
+                                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                <MenuItem Header="Copy"
+                                                          Click="CopyProcess_Click" />
+                                                <MenuItem Header="Copy Details"
+                                                          Click="CopyProcessDetails_Click" />
+                                            </ContextMenu>
+                                        </Grid.ContextMenu>
+                                        <Grid.Style>
+                                            <Style TargetType="Grid">
+                                                <Setter Property="Opacity" Value="1" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsStale}" Value="True">
+                                                        <Setter Property="Opacity" Value="0.5" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Grid.Style>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="22" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image Width="18"
+                                               Height="18"
+                                               Source="{Binding Icon}"
+                                               Stretch="Uniform" />
+                                        <StackPanel Grid.Column="1"
+                                                    Margin="4,0,8,0"
+                                                    Orientation="Horizontal">
+                                            <TextBlock FontWeight="SemiBold"
+                                                       Text="{Binding ImageName}" />
+                                            <TextBlock Margin="5,0,0,0"
+                                                       Text="{Binding ProcessId, StringFormat=({0})}" />
+                                            <TextBlock Margin="6,0,0,0"
+                                                       Foreground="#FF806000"
+                                                       Text="{Binding ReferenceLabel}" />
+                                            <TextBlock Margin="6,0,0,0"
+                                                       Foreground="#FFA12622"
+                                                       Text="{Binding StateLabel}" />
+                                        </StackPanel>
+                                        <Border Grid.Column="2"
+                                                Margin="0,0,5,0"
+                                                Padding="5,1"
+                                                Background="{Binding PlatformBadgeBackground}"
+                                                CornerRadius="3">
+                                            <TextBlock FontSize="11"
+                                                       Foreground="{Binding PlatformBadgeForeground}"
+                                                       Text="{Binding Platform}" />
+                                        </Border>
+                                        <Border Grid.Column="3"
+                                                Margin="0,0,5,0"
+                                                Padding="5,1"
+                                                Background="{Binding RoleBadgeBackground}"
+                                                CornerRadius="3">
+                                            <TextBlock FontSize="11"
+                                                       Foreground="{Binding RoleBadgeForeground}"
+                                                       Text="{Binding Role}" />
+                                        </Border>
+                                        <TextBlock Grid.Column="4"
+                                                   Foreground="#FFD13438"
+                                                   FontWeight="Bold"
+                                                   Text="!"
+                                                   Visibility="{Binding HasWarning, Converter={StaticResource BooleanToVisibility}}" />
+                                    </Grid>
+                                </HierarchicalDataTemplate>
+                            </TreeView.Resources>
+                        </TreeView>
+                    </Grid>
+
+                    <GridSplitter Grid.Row="1"
+                                  Grid.Column="1"
+                                  Width="5"
+                                  HorizontalAlignment="Stretch"
+                                  Background="#FFE1E5EB" />
+
+                    <Grid Grid.Row="1"
+                          Grid.Column="2"
+                          Margin="12,0,0,0">
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontSize="18"
+                                   Foreground="#FF6A7380"
+                                   Text="Select a Chromium or host process to inspect it.">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ProcessInspector}"
+                                                     Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ScrollViewer.Style>
+                                <Style TargetType="ScrollViewer">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ProcessInspector}"
+                                                     Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ScrollViewer.Style>
+                            <StackPanel DataContext="{Binding ProcessInspector}">
+                                <Border Margin="0,0,0,12"
+                                        Padding="14"
+                                        Background="White"
+                                        BorderBrush="#FFD8DDE6"
+                                        BorderThickness="1">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="44" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image Width="32"
+                                               Height="32"
+                                               Source="{Binding Icon}" />
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock FontSize="22"
+                                                       FontWeight="SemiBold"
+                                                       Text="{Binding ImageName}" />
+                                            <TextBlock Foreground="#FF5B6472">
+                                                <Run Text="{Binding Platform}" />
+                                                <Run Text=" · " />
+                                                <Run Text="{Binding Role}" />
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+
+                                <GroupBox Header="Summary" Style="{StaticResource SectionCard}">
+                                    <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
+                                                  ItemsSource="{Binding Summary}" />
+                                </GroupBox>
+                                <GroupBox Header="Runtime classification" Style="{StaticResource SectionCard}">
+                                    <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
+                                                  ItemsSource="{Binding Runtime}" />
+                                </GroupBox>
+                                <GroupBox Header="Executable and security" Style="{StaticResource SectionCard}">
+                                    <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
+                                                  ItemsSource="{Binding Executable}" />
+                                </GroupBox>
+                                <GroupBox Header="Command line" Style="{StaticResource SectionCard}">
+                                    <StackPanel>
+                                        <TextBox Padding="6"
+                                                 FontFamily="Consolas"
+                                                 IsReadOnly="True"
+                                                 Text="{Binding CommandLine, Mode=OneWay}"
+                                                 TextWrapping="Wrap" />
+                                        <DataGrid Margin="0,8,0,0" ItemsSource="{Binding Switches}" MaxHeight="240">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Switch" Binding="{Binding Name}" Width="*" />
+                                                <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="3*" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </StackPanel>
+                                </GroupBox>
+                                <GroupBox Header="Paths" Style="{StaticResource SectionCard}">
+                                    <DataGrid ItemsSource="{Binding Paths}" MaxHeight="260">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Kind" Binding="{Binding Kind}" Width="*" />
+                                            <DataGridTextColumn Header="Location" Binding="{Binding Value}" Width="3*" />
+                                            <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="*" />
+                                            <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence}" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </GroupBox>
+                                <GroupBox Header="DevTools and diagnostics" Style="{StaticResource SectionCard}">
+                                    <DataGrid ItemsSource="{Binding Diagnostics}" MaxHeight="260">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Kind" Binding="{Binding Kind}" Width="*" />
+                                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*" />
+                                            <DataGridTextColumn Header="Location" Binding="{Binding Location}" Width="2*" />
+                                            <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="3*" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </GroupBox>
+                                <Expander Margin="0,0,0,12"
+                                          Header="Additional Information"
+                                          IsExpanded="False">
+                                    <StackPanel Margin="0,8,0,0">
+                                        <GroupBox Header="Relationships" Style="{StaticResource SectionCard}">
+                                            <DataGrid ItemsSource="{Binding Relationships}" MaxHeight="230">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Direction" Binding="{Binding Direction}" />
+                                                    <DataGridTextColumn Header="Process" Binding="{Binding Process}" Width="*" />
+                                                    <DataGridTextColumn Header="Relationship" Binding="{Binding Relationship}" Width="*" />
+                                                    <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence}" />
+                                                    <DataGridTextColumn Header="Evidence" Binding="{Binding Evidence}" Width="2*" />
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </GroupBox>
+                                        <GroupBox Header="Evidence" Style="{StaticResource SectionCard}">
+                                            <DataGrid ItemsSource="{Binding Evidence}" MaxHeight="260">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="*" />
+                                                    <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="3*" />
+                                                    <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence}" />
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </GroupBox>
+                                        <GroupBox Header="Access and discovery issues" Style="{StaticResource SectionCard}">
+                                            <ItemsControl ItemsSource="{Binding Issues}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Margin="0,3"
+                                                                Padding="8"
+                                                                Background="#FFFFECEC">
+                                                            <TextBlock Text="{Binding Message}"
+                                                                       TextWrapping="Wrap" />
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </GroupBox>
+                                    </StackPanel>
+                                </Expander>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <ItemsControl Grid.Row="2"
+                                  Grid.ColumnSpan="3"
+                                  Margin="0,8,0,0"
+                                  MaxHeight="100"
+                                  ItemTemplate="{StaticResource NoticeTemplate}"
+                                  ItemsSource="{Binding ProcessNotices}" />
                 </Grid>
             </TabItem>
 
-            <TabItem Header="OS process tree">
-                <TreeView ItemsSource="{Binding ProcessTree}"
-                          Margin="8">
-                    <TreeView.Resources>
-                        <HierarchicalDataTemplate DataType="{x:Type local:ProcessTreeRow}"
-                                                  ItemsSource="{Binding Children}">
-                            <TextBlock Text="{Binding DisplayName}" />
-                        </HierarchicalDataTemplate>
-                    </TreeView.Resources>
-                </TreeView>
+            <TabItem Header="Installs">
+                <Grid Margin="4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="760" MinWidth="420" />
+                        <ColumnDefinition Width="5" />
+                        <ColumnDefinition Width="*" MinWidth="320" />
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.ColumnSpan="3"
+                            Margin="0,0,0,8"
+                            Padding="8"
+                            Background="White"
+                            BorderBrush="#FFD8DDE6"
+                            BorderThickness="1">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Left"
+                                        Orientation="Horizontal">
+                                <Button Click="RefreshInstallations_Click"
+                                        Padding="12,4"
+                                        Content="Refresh">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="IsEnabled" Value="True" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsScanningInstallations}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button Margin="6,0,0,0"
+                                        Click="CancelInstallationScan_Click"
+                                        Padding="12,4"
+                                        Content="Cancel"
+                                        ToolTip="Stop the current installation scan">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="IsEnabled" Value="False" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsScanningInstallations}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="True" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <ProgressBar Width="90"
+                                             Height="6"
+                                             Margin="10,0,0,0"
+                                             VerticalAlignment="Center"
+                                             IsIndeterminate="True">
+                                    <ProgressBar.Style>
+                                        <Style TargetType="ProgressBar">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsScanningInstallations}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ProgressBar.Style>
+                                </ProgressBar>
+                            </StackPanel>
+                            <TextBlock Margin="12,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="#FF5B6472"
+                                       Text="{Binding InstallationStatus}" />
+                        </DockPanel>
+                    </Border>
+                    <Grid Grid.Row="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Border
+                                Margin="0,0,0,8"
+                                Background="White"
+                                BorderBrush="#FFB8C0CC"
+                                BorderThickness="1"
+                                CornerRadius="3">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="30" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Path Width="14"
+                                      Height="14"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      Data="M6.5,1 A5.5,5.5 0 1 0 6.5,12 A5.5,5.5 0 1 0 6.5,1 M10.5,10.5 L15,15"
+                                      Stroke="#FF7A8491"
+                                      StrokeThickness="1.5" />
+                                <Grid Grid.Column="1">
+                                    <TextBlock Margin="1,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Foreground="#FF929AA5"
+                                               IsHitTestVisible="False"
+                                               Text="Filter installations">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding InstallationFilter}" Value="">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBox Padding="0,5"
+                                             BorderThickness="0"
+                                             Background="Transparent"
+                                             Text="{Binding InstallationFilter, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="Filter by name, platform, kind, version, channel, or path" />
+                                </Grid>
+                            </Grid>
+                        </Border>
+                        <Grid Grid.Row="1">
+                            <DataGrid ItemsSource="{Binding FilteredInstallations}"
+                                      PreviewMouseRightButtonDown="Installations_PreviewMouseRightButtonDown"
+                                      SelectedItem="{Binding SelectedInstallation}"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                      Sorting="Installations_Sorting">
+                                <DataGrid.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Copy"
+                                                  Click="CopyInstallation_Click"
+                                                  Tag="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                        <MenuItem Header="Copy Details"
+                                                  Click="CopyInstallationDetails_Click"
+                                                  Tag="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    </ContextMenu>
+                                </DataGrid.ContextMenu>
+                                <DataGrid.Columns>
+                                    <DataGridTemplateColumn Header="" Width="34" CanUserSort="False">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Image Width="20"
+                                                       Height="20"
+                                                       Source="{Binding Icon}"
+                                                       Stretch="Uniform" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="2*" />
+                                    <DataGridTextColumn Header="Platform" Binding="{Binding Platform}" />
+                                    <DataGridTextColumn Header="Kind" Binding="{Binding Kind}" />
+                                    <DataGridTextColumn Header="Version"
+                                                        Binding="{Binding Version}"
+                                                        SortMemberPath="Version"
+                                                        Width="145" />
+                                    <DataGridTextColumn Header="Channel"
+                                                        Binding="{Binding Channel}"
+                                                        SortMemberPath="Channel" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </Grid>
+                    <GridSplitter Grid.Row="1"
+                                  Grid.Column="1"
+                                  Width="5"
+                                  Background="#FFE1E5EB" />
+                    <Grid Grid.Row="1"
+                          Grid.Column="2"
+                          Margin="12,0,0,0">
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontSize="18"
+                                   Foreground="#FF6A7380"
+                                   Text="Select an install to inspect it.">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedInstallation}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ScrollViewer.Style>
+                                <Style TargetType="ScrollViewer">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedInstallation}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ScrollViewer.Style>
+                            <StackPanel>
+                                <GroupBox Header="Selected installation" Style="{StaticResource SectionCard}">
+                                    <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
+                                                  ItemsSource="{Binding SelectedInstallation.Details}" />
+                                </GroupBox>
+                                <GroupBox Header="Discovery evidence" Style="{StaticResource SectionCard}">
+                                    <DataGrid ItemsSource="{Binding SelectedInstallation.Evidence}">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="*" />
+                                            <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="3*" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </GroupBox>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                    <ItemsControl Grid.Row="2"
+                                  Grid.ColumnSpan="3"
+                                  Margin="0,8,0,0"
+                                  MaxHeight="100"
+                                  ItemTemplate="{StaticResource NoticeTemplate}"
+                                  ItemsSource="{Binding InstallationNotices}" />
+                </Grid>
             </TabItem>
 
-            <TabItem Header="Process details">
-                <TextBox Text="{Binding SelectedProcessDetails, Mode=OneWay}"
-                         Margin="8"
-                         FontFamily="Consolas"
-                         FontSize="13"
-                         IsReadOnly="True"
-                         TextWrapping="NoWrap"
-                         AcceptsReturn="True"
-                         VerticalScrollBarVisibility="Auto"
-                         HorizontalScrollBarVisibility="Auto" />
-            </TabItem>
-
-            <TabItem Header="Mojo">
-                <DataGrid ItemsSource="{Binding MojoPipes}"
-                          Margin="6"
-                          AutoGenerateColumns="False"
-                          IsReadOnly="True"
-                          EnableRowVirtualization="True">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Pipe"
-                                            Binding="{Binding PipeName}"
-                                            Width="3*" />
-                        <DataGridTextColumn Header="Server"
-                                            Binding="{Binding Server}"
-                                            Width="*" />
-                        <DataGridTextColumn Header="Server PID"
-                                            Binding="{Binding ServerProcessId}" />
-                        <DataGridTextColumn Header="Client"
-                                            Binding="{Binding Client}"
-                                            Width="*" />
-                        <DataGridTextColumn Header="Client PID"
-                                            Binding="{Binding ClientProcessId}" />
-                        <DataGridTextColumn Header="State"
-                                            Binding="{Binding State}"
-                                            Width="*" />
-                    </DataGrid.Columns>
-                </DataGrid>
-            </TabItem>
-
-            <TabItem Header="CDP">
-                <DataGrid ItemsSource="{Binding CdpTransports}"
-                          Margin="6"
-                          AutoGenerateColumns="False"
-                          IsReadOnly="True"
-                          EnableRowVirtualization="True">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="PID"
-                                            Binding="{Binding ProcessId}" />
-                        <DataGridTextColumn Header="Kind"
-                                            Binding="{Binding Kind}" />
-                        <DataGridTextColumn Header="Status"
-                                            Binding="{Binding Status}" />
-                        <DataGridTextColumn Header="Port"
-                                            Binding="{Binding Port}" />
-                        <DataGridTextColumn Header="Browser"
-                                            Binding="{Binding Browser}"
-                                            Width="2*" />
-                        <DataGridTextColumn Header="Restriction"
-                                            Binding="{Binding Restriction}"
-                                            Width="2*" />
-                        <DataGridTextColumn Header="Error"
-                                            Binding="{Binding Error}"
-                                            Width="3*" />
-                    </DataGrid.Columns>
-                </DataGrid>
-            </TabItem>
-
-            <TabItem Header="Installations">
-                <DataGrid ItemsSource="{Binding Installations}"
-                          Margin="6"
-                          AutoGenerateColumns="False"
-                          IsReadOnly="True"
-                          EnableRowVirtualization="True">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Name"
-                                            Binding="{Binding Name}"
-                                            Width="2*" />
-                        <DataGridTextColumn Header="Platform"
-                                            Binding="{Binding Platform}" />
-                        <DataGridTextColumn Header="Kind"
-                                            Binding="{Binding Kind}" />
-                        <DataGridTextColumn Header="Version"
-                                            Binding="{Binding Version}" />
-                        <DataGridTextColumn Header="Channel"
-                                            Binding="{Binding Channel}" />
-                        <DataGridTextColumn Header="Install type"
-                                            Binding="{Binding InstallType}" />
-                        <DataGridTextColumn Header="Confidence"
-                                            Binding="{Binding Confidence}" />
-                        <DataGridTextColumn Header="Path"
-                                            Binding="{Binding InstallPath}"
-                                            Width="4*" />
-                    </DataGrid.Columns>
-                </DataGrid>
-            </TabItem>
-
-            <TabItem Header="Issues / partial coverage">
-                <DataGrid ItemsSource="{Binding Issues}"
-                          Margin="6"
-                          AutoGenerateColumns="False"
-                          IsReadOnly="True"
-                          EnableRowVirtualization="True">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Source"
-                                            Binding="{Binding Source}"
-                                            Width="2*" />
-                        <DataGridTextColumn Header="PID"
-                                            Binding="{Binding ProcessId}" />
-                        <DataGridTextColumn Header="Message"
-                                            Binding="{Binding Message}"
-                                            Width="6*" />
-                    </DataGrid.Columns>
-                </DataGrid>
-            </TabItem>
-
-            <TabItem Header="JSON">
-                <TextBox Text="{Binding JsonText, Mode=OneWay}"
-                         Margin="8"
-                         FontFamily="Consolas"
-                         FontSize="12"
-                         IsReadOnly="True"
-                         AcceptsReturn="True"
-                         VerticalScrollBarVisibility="Auto"
-                         HorizontalScrollBarVisibility="Auto" />
+            <TabItem Header="DevTools">
+                <Grid Margin="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="3*" />
+                        <ColumnDefinition Width="5" />
+                        <ColumnDefinition Width="2*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <ItemsControl ItemsSource="{Binding DevToolsNotices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Margin="5"
+                                               Foreground="#FFA12622"
+                                               Text="{Binding Message}"
+                                               TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <DataGrid Grid.Row="1"
+                                  ItemsSource="{Binding DevTools}"
+                                  SelectedItem="{Binding SelectedDevTools}"
+                                  SelectionChanged="DevTools_SelectionChanged">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="PID" Binding="{Binding ProcessId}" />
+                                <DataGridTextColumn Header="Availability" Binding="{Binding Availability}" Width="2*" />
+                                <DataGridTextColumn Header="Transport" Binding="{Binding TransportLabel}" Width="*" />
+                                <DataGridTextColumn Header="Browser" Binding="{Binding Browser}" Width="2*" />
+                                <DataGridTextColumn Header="Restriction or error" Binding="{Binding Error}" Width="3*" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                    <GridSplitter Grid.Column="1" Width="5" Background="#FFE1E5EB" />
+                    <ScrollViewer Grid.Column="2"
+                                  Margin="12,0,0,0"
+                                  VerticalScrollBarVisibility="Auto">
+                        <GroupBox Header="Selected DevTools endpoint" Style="{StaticResource SectionCard}">
+                            <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
+                                          ItemsSource="{Binding SelectedDevTools.Details}" />
+                        </GroupBox>
+                    </ScrollViewer>
+                </Grid>
             </TabItem>
         </TabControl>
     </DockPanel>

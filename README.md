@@ -21,8 +21,9 @@ The solution targets .NET 9 on Windows and contains:
   pipe and installation enumeration. The public APIs can be consumed by the
   CLI, GUI, or other .NET applications.
 - **cpe** - a thin command-line wrapper with human-readable and JSON output.
-- **ChromiumProcessExplorer** - a WPF frontend for process graph/tree,
-  process details, Mojo/CDP evidence, installations, issues, and JSON export.
+- **ChromiumProcessExplorer** - a task-focused WPF frontend with a filtered
+  Chromium/host process tree, structured process inspector, installations,
+  and DevTools availability.
 - **ChromiumProcessExplorer.Core.Tests** - focused tests for command-line
   parsing, discovery, graph construction, runtime adapters, broker/MCP
   contracts, and GUI view-model behavior.
@@ -123,11 +124,55 @@ the same data in `TimedOutQueries`. Administrator access improves coverage.
 dotnet run --project src\ChromiumProcessExplorer.Gui
 ```
 
-The WPF frontend refreshes process and relationship data asynchronously,
-retains stale/exited process generations, displays OS-parent and logical edges
-separately with evidence and confidence, and exposes process details, Mojo,
-CDP, installations, partial-coverage issues, broker status, cancellation, and
-JSON export. All discovery is performed through public Core APIs.
+The WPF frontend presents only Chromium runtime processes and associated native
+hosts in a searchable tree. Executable icons and role badges make browser,
+renderer, GPU, utility, service, and host processes scannable. Selecting a
+process opens structured sections for identity, runtime classification,
+executable/security metadata, command-line switches, paths, DevTools, and
+diagnostics. Relationships, evidence, and contextual access errors are grouped
+under a collapsed `Additional Information` section. Sensitive local paths and
+command lines are shown because the GUI is an interactive local diagnostic
+tool.
+
+Processes that just exited remain gray and selectable for one refresh so their
+captured details are not lost, then disappear on the next refresh. The
+Installs and DevTools tabs present processed, actionable information
+instead of raw discovery JSON or internal Mojo-pipe records. All discovery is
+performed through public Core APIs.
+
+Process auto refresh is enabled by default. The GUI polls only the visible Mojo
+pipe-name set on a short interval; it performs the expensive process, handle,
+relationship, window, and DevTools refresh only when that lightweight
+fingerprint changes. It can be disabled from the Processes toolbar.
+
+Filtering the process tree keeps matching nodes and their ancestors visible and
+expands those ancestor paths automatically. The same toolbar provides an
+expand-all/collapse-all toggle. Installations have a separate filter for name,
+platform, kind, version, channel, and path. The initial process and installation
+refreshes run together at startup. Both process and install rows provide
+context-menu actions for copying a summary or complete human-readable details.
+Install versions sort by their numeric components, channels sort Stable, Beta,
+Dev, Canary, Internal, then FixedApp, and app-bundled runtimes are labeled
+`FixedApp`.
+
+Process-tree badges use a stable category palette:
+
+- purple identifies the platform or product, such as CEF, WebView2, Electron,
+  Edge, Chrome, Brave, or Chromium;
+- blue identifies browser, main, and native-host processes;
+- green identifies renderers;
+- violet identifies GPU processes;
+- amber identifies utility and named service processes such as network, audio,
+  storage, and data-decoder services;
+- teal identifies workers and service workers;
+- red identifies Crashpad/crash handlers and DevTools processes; and
+- gray identifies other or currently unknown roles.
+
+Role text is normalized to consistent display casing. When Chromium exposes a
+`--utility-sub-type`, the tree shows the service purpose rather than only
+`Utility`. Executable icons are loaded asynchronously and packaged
+WindowsApps/SystemApps processes use this priority: embedded executable icon,
+Appx manifest logo, shell file icon, then the generic fallback.
 
 `installations` combines six evidence sources:
 
@@ -156,6 +201,11 @@ depth remain configurable, and scans stop after 50,000 directories by default;
 explicit-root scans omit registry/package sources unless those options are
 enabled. A WebView2 loader marker alone leaves runtime scope unknown because it
 can select either Evergreen/shared or fixed/app-local deployment.
+
+The filesystem marker scan remains bounded by its configured directory limit.
+Independent uninstall-registry, Windows package, and browser-managed-app
+metadata sources run concurrently with that scan to reduce wall-clock time
+without sharing mutable discovery state.
 
 `cdp` parses remote-debugging switches on browser processes, resolves ephemeral
 ports through `DevToolsActivePort`, and validates loopback endpoints through a
@@ -325,8 +375,8 @@ Features are designed to be exposed through two executables backed by shared
 
 - **CLI** - currently supports terminal use, scripting, automation, and
   structured output.
-- **GUI** - provides interactive process graph/tree, details, Mojo/CDP,
-  installation, issue, and JSON views with refresh and cancellation.
+- **GUI** - provides a Chromium/host process tree and structured inspector,
+  plus focused installation and DevTools views with refresh and cancellation.
 
 The repository includes a Copilot skill and typed stdio MCP bridge. Copilot
 remains unelevated and can call only the broker's fixed, read-only, redacted

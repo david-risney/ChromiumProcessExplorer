@@ -1,4 +1,3 @@
-using ChromiumProcessExplorer.Core.Broker;
 using ChromiumProcessExplorer.Core.Discovery;
 
 namespace ChromiumProcessExplorer.Gui;
@@ -8,15 +7,19 @@ public interface IGuiDiscoveryService
     ValueTask<ChromiumDiscoveryResult> DiscoverProcessesAsync(
         CancellationToken cancellationToken);
 
+    ValueTask<MojoPipeEnumerationResult> EnumerateMojoPipesAsync(
+        CancellationToken cancellationToken);
+
     ValueTask<ProcessDetailsResult> DiscoverProcessDetailsAsync(
         int processId,
+        CancellationToken cancellationToken);
+
+    ValueTask<DiagnosticArtifactDiscoveryResult> DiscoverDiagnosticsAsync(
         CancellationToken cancellationToken);
 
     ValueTask<InstallationDiscoveryResult> DiscoverInstallationsAsync(
         CancellationToken cancellationToken);
 
-    ValueTask<BrokerResponse> ProbeBrokerAsync(
-        CancellationToken cancellationToken);
 }
 
 public sealed class GuiDiscoveryService : IGuiDiscoveryService
@@ -40,13 +43,27 @@ public sealed class GuiDiscoveryService : IGuiDiscoveryService
             cancellationToken: cancellationToken);
     }
 
+    public ValueTask<MojoPipeEnumerationResult> EnumerateMojoPipesAsync(
+        CancellationToken cancellationToken)
+    {
+        return _discovery.EnumerateMojoPipesAsync(cancellationToken);
+    }
+
     public async ValueTask<ProcessDetailsResult> DiscoverProcessDetailsAsync(
         int processId,
         CancellationToken cancellationToken)
     {
         return await _discovery.DiscoverProcessDetailsAsync(
             processId,
-            includeSensitiveValues: false,
+            includeSensitiveValues: true,
+            cancellationToken: cancellationToken);
+    }
+
+    public async ValueTask<DiagnosticArtifactDiscoveryResult>
+        DiscoverDiagnosticsAsync(CancellationToken cancellationToken)
+    {
+        return await _discovery.DiscoverDiagnosticArtifactsAsync(
+            includeSensitiveValues: true,
             cancellationToken: cancellationToken);
     }
 
@@ -54,17 +71,6 @@ public sealed class GuiDiscoveryService : IGuiDiscoveryService
         CancellationToken cancellationToken)
     {
         return await _discovery.DiscoverInstallationsAsync(
-            cancellationToken: cancellationToken);
-    }
-
-    public async ValueTask<BrokerResponse> ProbeBrokerAsync(
-        CancellationToken cancellationToken)
-    {
-        ChromiumBrokerClient client = new(
-            BrokerServerOptions.CreateDefault().PipeName,
-            TimeSpan.FromSeconds(2));
-        return await client.SendAsync(
-            BrokerOperations.Probe,
             cancellationToken: cancellationToken);
     }
 }

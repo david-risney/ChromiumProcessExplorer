@@ -465,6 +465,32 @@ public sealed class WindowsInstallationProviderTests : IDisposable
         Assert.True(result.Statistics.TruncatedDirectoryCount > 0);
     }
 
+    [Fact]
+    public async Task IndependentMetadataSourcesRunConcurrently()
+    {
+        using Barrier barrier = new(3);
+        WindowsInstallationDiscoveryOptions options = new(
+            [_root],
+            includeKnownLocations: false)
+        {
+            IncludeRegistry = true,
+            IncludePackages = true,
+            IncludeBrowserManagedApps = true,
+        };
+        WindowsInstallationProvider provider = new(
+            options,
+            new CoordinatedInstalledProgramProvider(barrier),
+            new CoordinatedPackageProvider(barrier),
+            new CoordinatedBrowserManagedAppProvider(barrier));
+
+        InstallationDiscoveryResult result = await provider
+            .DiscoverAsync([])
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(result.Issues);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
@@ -542,6 +568,54 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             return apps;
+        }
+    }
+
+    private sealed class CoordinatedInstalledProgramProvider(Barrier barrier)
+        : IInstalledProgramProvider
+    {
+        public IReadOnlyList<InstalledProgramRecord> Discover(
+            ICollection<DiscoveryIssue> issues,
+            CancellationToken cancellationToken = default)
+        {
+            Signal(barrier, cancellationToken);
+            return [];
+        }
+    }
+
+    private sealed class CoordinatedPackageProvider(Barrier barrier)
+        : IWindowsPackageInstallationProvider
+    {
+        public IReadOnlyList<WindowsPackageInstallation> Discover(
+            IReadOnlyList<ProcessSnapshotEntry> runningProcesses,
+            ICollection<DiscoveryIssue> issues,
+            CancellationToken cancellationToken = default)
+        {
+            Signal(barrier, cancellationToken);
+            return [];
+        }
+    }
+
+    private sealed class CoordinatedBrowserManagedAppProvider(Barrier barrier)
+        : IBrowserManagedAppProvider
+    {
+        public IReadOnlyList<BrowserManagedAppInstallation> Discover(
+            ICollection<DiscoveryIssue> issues,
+            CancellationToken cancellationToken = default)
+        {
+            Signal(barrier, cancellationToken);
+            return [];
+        }
+    }
+
+    private static void Signal(
+        Barrier barrier,
+        CancellationToken cancellationToken)
+    {
+        if (!barrier.SignalAndWait(TimeSpan.FromSeconds(3), cancellationToken))
+        {
+            throw new TimeoutException(
+                "Installation metadata providers did not run concurrently.");
         }
     }
 }

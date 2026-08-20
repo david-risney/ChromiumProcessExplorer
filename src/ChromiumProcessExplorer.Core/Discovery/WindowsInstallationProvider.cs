@@ -150,6 +150,44 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             DiscoverKnownLocations(installations, issues, cancellationToken);
         }
 
+        Task<RegistryDiscoveryBatch>? registryTask =
+            _options.IncludeRegistry
+                ? Task.Run(() =>
+                {
+                    List<DiscoveryIssue> sourceIssues = [];
+                    IReadOnlyList<InstalledProgramRecord> records =
+                        _installedProgramProvider.Discover(
+                            sourceIssues,
+                            cancellationToken);
+                    return new RegistryDiscoveryBatch(records, sourceIssues);
+                }, cancellationToken)
+                : null;
+        Task<PackageDiscoveryBatch>? packageTask =
+            _options.IncludePackages
+                ? Task.Run(() =>
+                {
+                    List<DiscoveryIssue> sourceIssues = [];
+                    IReadOnlyList<WindowsPackageInstallation> packages =
+                        _packageProvider.Discover(
+                            runningProcesses,
+                            sourceIssues,
+                            cancellationToken);
+                    return new PackageDiscoveryBatch(packages, sourceIssues);
+                }, cancellationToken)
+                : null;
+        Task<BrowserAppDiscoveryBatch>? browserAppTask =
+            _options.IncludeBrowserManagedApps
+                ? Task.Run(() =>
+                {
+                    List<DiscoveryIssue> sourceIssues = [];
+                    IReadOnlyList<BrowserManagedAppInstallation> apps =
+                        _browserManagedAppProvider.Discover(
+                            sourceIssues,
+                            cancellationToken);
+                    return new BrowserAppDiscoveryBatch(apps, sourceIssues);
+                }, cancellationToken)
+                : null;
+
         string[] searchRoots = GetSearchRoots();
         foreach (string searchRoot in searchRoots)
         {
@@ -168,32 +206,34 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             counters,
             cancellationToken);
 
-        if (_options.IncludeRegistry)
+        if (registryTask is not null)
         {
-            IReadOnlyList<InstalledProgramRecord> registryRecords =
-                _installedProgramProvider.Discover(issues, cancellationToken);
-            counters.RegistryRecordCount = registryRecords.Count;
+            RegistryDiscoveryBatch batch =
+                registryTask.GetAwaiter().GetResult();
+            issues.AddRange(batch.Issues);
+            counters.RegistryRecordCount = batch.Records.Count;
             DiscoverRegisteredApplications(
-                registryRecords,
+                batch.Records,
                 installations,
                 cancellationToken);
         }
 
-        if (_options.IncludePackages)
+        if (packageTask is not null)
         {
-            IReadOnlyList<WindowsPackageInstallation> packages =
-                _packageProvider.Discover(
-                    runningProcesses,
-                    issues,
-                    cancellationToken);
-            counters.PackageCount = packages.Count;
-            DiscoverPackages(packages, installations);
+            PackageDiscoveryBatch batch =
+                packageTask.GetAwaiter().GetResult();
+            issues.AddRange(batch.Issues);
+            counters.PackageCount = batch.Packages.Count;
+            DiscoverPackages(batch.Packages, installations);
         }
 
-        if (_options.IncludeBrowserManagedApps)
+        if (browserAppTask is not null)
         {
+            BrowserAppDiscoveryBatch batch =
+                browserAppTask.GetAwaiter().GetResult();
+            issues.AddRange(batch.Issues);
             DiscoverBrowserManagedApps(
-                _browserManagedAppProvider.Discover(issues, cancellationToken),
+                batch.Apps,
                 installations);
         }
 
@@ -1420,6 +1460,18 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
         public int PackageCount { get; set; }
     }
+
+    private sealed record RegistryDiscoveryBatch(
+        IReadOnlyList<InstalledProgramRecord> Records,
+        IReadOnlyList<DiscoveryIssue> Issues);
+
+    private sealed record PackageDiscoveryBatch(
+        IReadOnlyList<WindowsPackageInstallation> Packages,
+        IReadOnlyList<DiscoveryIssue> Issues);
+
+    private sealed record BrowserAppDiscoveryBatch(
+        IReadOnlyList<BrowserManagedAppInstallation> Apps,
+        IReadOnlyList<DiscoveryIssue> Issues);
 
     private sealed class InstallationBuilder
     {
