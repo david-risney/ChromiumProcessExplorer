@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using ChromiumProcessExplorer.Core.Discovery;
 
@@ -5,6 +6,9 @@ namespace ChromiumProcessExplorer.Gui;
 
 internal static class Program
 {
+    internal const string AppUserModelId =
+        "DavidRisney.ChromiumProcessExplorer";
+
     [STAThread]
     public static int Main(string[] args)
     {
@@ -31,6 +35,9 @@ internal static class Program
             return 1;
         }
 
+        Marshal.ThrowExceptionForHR(
+            SetCurrentProcessExplicitAppUserModelID(AppUserModelId));
+
         Application application = new()
         {
             ShutdownMode = ShutdownMode.OnMainWindowClose,
@@ -41,4 +48,8 @@ internal static class Program
         application.Run();
         return 0;
     }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(
+        string appId);
 }
