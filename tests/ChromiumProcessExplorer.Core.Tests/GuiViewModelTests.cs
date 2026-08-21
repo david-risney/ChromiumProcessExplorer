@@ -1234,19 +1234,24 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
-    public async Task RunSectionLaunchesFilteredApplicableInstall()
+    public async Task RunSectionLaunchesExplicitUiSelection()
     {
-        ChromiumInstallation installation = CreateInstallation(
+        ChromiumInstallation chrome = CreateInstallation(
             "Google Chrome",
             "Chrome",
             @"C:\Chrome",
+            kind: "Browser");
+        ChromiumInstallation edge = CreateInstallation(
+            "Microsoft Edge",
+            "Edge",
+            @"C:\Edge",
             kind: "Browser");
         StubGuiDiscoveryService discovery = new()
         {
             DiscoverInstallations = _ => ValueTask.FromResult(
                 new InstallationDiscoveryResult(
                     SnapshotTime,
-                    [installation],
+                    [chrome, edge],
                     new InstallationDiscoveryStatistics(
                         0,
                         0,
@@ -1266,13 +1271,16 @@ public sealed class GuiViewModelTests
             externalTools: externalTools);
 
         await viewModel.RefreshInstallationsAsync();
-        viewModel.CommandLineRunFilter = "chrome";
-        CommandLineRunTargetViewModel target = Assert.Single(
-            viewModel.FilteredCommandLineRunTargets);
-        viewModel.SelectedCommandLineRunTarget = target;
-        viewModel.RunSelectedCommandLineTarget();
+        CommandLineRunTargetViewModel chromeTarget =
+            viewModel.FilteredCommandLineRunTargets.Single(target =>
+                target.ExecutablePath == chrome.ExecutablePath);
+        viewModel.SelectedCommandLineRunTarget =
+            viewModel.FilteredCommandLineRunTargets.Single(target =>
+                target.ExecutablePath == edge.ExecutablePath);
+        viewModel.RunCommandLineTarget(chromeTarget);
 
-        Assert.Equal(installation.ExecutablePath, externalTools.Launch?.Executable);
+        Assert.Equal(chrome.ExecutablePath, externalTools.Launch?.Executable);
+        Assert.Same(chromeTarget, viewModel.SelectedCommandLineRunTarget);
         Assert.Contains(
             "--remote-debugging-port=9222",
             externalTools.Launch?.Arguments ?? []);

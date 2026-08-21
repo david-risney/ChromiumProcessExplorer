@@ -105,6 +105,12 @@ public sealed record WindowsInstallationDiscoveryOptions
     /// </summary>
     public IReadOnlyList<string> AdditionalSearchRoots { get; init; } = [];
 
+    /// <summary>
+    /// Gets paths whose ancestors and descendants are scanned before unrelated
+    /// directories.
+    /// </summary>
+    public IReadOnlyList<string> PrioritySearchPaths { get; init; } = [];
+
     /// <summary>Gets whether well-known browser and WebView2 locations are checked.</summary>
     public bool IncludeKnownLocations { get; init; } = true;
 
@@ -120,7 +126,7 @@ public sealed record WindowsInstallationDiscoveryOptions
     /// <summary>Gets the maximum recursive depth beneath each search root.</summary>
     public int MaximumDepth { get; init; } = 12;
 
-    /// <summary>Gets the maximum total directories inspected by one scan.</summary>
+    /// <summary>Gets the maximum directories inspected beneath each search root.</summary>
     public int MaximumDirectories { get; init; } = 50_000;
 
     /// <summary>Gets the maximum number of filesystem roots scanned concurrently.</summary>

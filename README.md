@@ -171,9 +171,11 @@ Dev, Canary, Internal, then FixedApp, and app-bundled runtimes are labeled
 `FixedApp`.
 
 Installation discovery scans filesystem roots concurrently, defaulting to the
-logical processor count while preserving the configured global directory
-limit. Registry, Windows package, and browser-managed app discovery also run in
-parallel with the filesystem scan.
+logical processor count. Each root has its own directory limit, so one large
+tree cannot starve the other roots. Known browser/runtime locations, registered
+install paths, running executable directories, and their path ancestors are
+traversed before unrelated directories. Registry, Windows package, and
+browser-managed app discovery also run concurrently.
 
 Process context menus can launch the configured debugger for the selected PID,
 open Process Explorer at that PID, terminate its process tree, or configure
@@ -215,7 +217,7 @@ and the feature flags published on the same page. It also includes complete
 arguments observed on currently running Chromium processes. Double-click an
 entry or use **Add selected argument** to append it to the current template.
 The Run section filters applicable installed executables and running browser
-processes and launches the selected target with the template.
+processes and launches the row selected in the UI with the template.
 
 Process-tree badges use a stable category palette:
 

@@ -296,7 +296,9 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs e)
     {
-        _viewModel.RunSelectedCommandLineTarget();
+        _viewModel.RunCommandLineTarget(
+            ((Button)sender).CommandParameter
+                as CommandLineRunTargetViewModel);
     }
 
     private void UpdateCommandLineSuggestionContext()

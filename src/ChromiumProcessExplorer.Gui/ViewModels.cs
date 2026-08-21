@@ -769,22 +769,29 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void RunSelectedCommandLineTarget()
     {
+        RunCommandLineTarget(SelectedCommandLineRunTarget);
+    }
+
+    public void RunCommandLineTarget(
+        CommandLineRunTargetViewModel? target)
+    {
         if (SelectedCommandLineTemplate is null
-            || SelectedCommandLineRunTarget is null)
+            || target is null)
         {
             return;
         }
 
-        if (SelectedCommandLineRunTarget.Process is not null)
+        SelectedCommandLineRunTarget = target;
+        if (target.Process is not null)
         {
             LaunchWithTemplate(
-                SelectedCommandLineRunTarget.Process,
+                target.Process,
                 SelectedCommandLineTemplate);
         }
-        else if (SelectedCommandLineRunTarget.Installation is not null)
+        else if (target.Installation is not null)
         {
             LaunchWithTemplate(
-                SelectedCommandLineRunTarget.Installation,
+                target.Installation,
                 SelectedCommandLineTemplate);
         }
     }

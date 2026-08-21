@@ -492,7 +492,7 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task ParallelSearchRootsShareGlobalDirectoryLimit()
+    public async Task ParallelSearchRootsHaveIndependentDirectoryLimits()
     {
         string[] roots = Enumerable.Range(0, 3)
             .Select(index => Path.Combine(_root, $"root-{index}"))
@@ -513,7 +513,36 @@ public sealed class WindowsInstallationProviderTests : IDisposable
 
         InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
 
-        Assert.Equal(2, result.Statistics.DirectoryCount);
+        Assert.Equal(6, result.Statistics.DirectoryCount);
+        Assert.True(result.Statistics.TruncatedDirectoryCount > 0);
+    }
+
+    [Fact]
+    public async Task PriorityPathsAreScannedBeforeUnrelatedDirectories()
+    {
+        string unrelated = Path.Combine(_root, "aaa-unrelated", "nested");
+        string priority = Path.Combine(_root, "zzz-priority", "application");
+        Directory.CreateDirectory(unrelated);
+        Directory.CreateDirectory(priority);
+        File.WriteAllText(
+            Path.Combine(priority, "libcef.dll"),
+            string.Empty);
+        WindowsInstallationProvider provider = new(
+            new WindowsInstallationDiscoveryOptions(
+                [_root],
+                includeKnownLocations: false)
+            {
+                MaximumDirectories = 3,
+                PrioritySearchPaths = [priority],
+            });
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        Assert.Contains(
+            result.Installations,
+            installation => installation.InstallPath == priority
+                && installation.Platform == "CEF");
+        Assert.Equal(3, result.Statistics.DirectoryCount);
         Assert.True(result.Statistics.TruncatedDirectoryCount > 0);
     }
 

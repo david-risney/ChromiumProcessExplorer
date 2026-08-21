@@ -1045,7 +1045,8 @@
                                                  Padding="6"
                                                  Text="{Binding DataContext.CommandLineRunFilter, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=PropertyChanged}"
                                                  ToolTip="Filter by target name, source, executable path, or running command line" />
-                                        <DataGrid Height="220"
+                                        <DataGrid x:Name="CommandLineRunTargetsGrid"
+                                                  Height="220"
                                                   Margin="0,8,0,0"
                                                   ItemsSource="{Binding DataContext.FilteredCommandLineRunTargets, RelativeSource={RelativeSource AncestorType=Window}}"
                                                   SelectedItem="{Binding DataContext.SelectedCommandLineRunTarget, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -1068,6 +1069,7 @@
                                                 HorizontalAlignment="Right"
                                                 Padding="16,5"
                                                 Click="RunCommandLineTemplate_Click"
+                                                CommandParameter="{Binding SelectedItem, ElementName=CommandLineRunTargetsGrid}"
                                                 Content="Run selected" />
                                     </StackPanel>
                                 </GroupBox>

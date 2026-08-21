@@ -190,9 +190,14 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 }, cancellationToken)
                 : null;
 
+        RegistryDiscoveryBatch? registryBatch =
+            registryTask?.GetAwaiter().GetResult();
         string[] searchRoots = GetSearchRoots();
         List<DiscoveryIssue>[] filesystemIssues = searchRoots
             .Select(_ => new List<DiscoveryIssue>())
+            .ToArray();
+        ScanCounters[] filesystemCounters = searchRoots
+            .Select(_ => new ScanCounters())
             .ToArray();
         object installationSync = new();
         Parallel.For(
@@ -209,13 +214,29 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                     searchRoots[index],
                     installations,
                     filesystemIssues[index],
-                    counters,
+                    filesystemCounters[index],
                     installationSync,
+                    GetPrioritySearchPaths(
+                        searchRoots[index],
+                        runningProcesses,
+                        registryBatch?.Records ?? []),
                     cancellationToken);
             });
-        foreach (List<DiscoveryIssue> rootIssues in filesystemIssues)
+        for (int index = 0; index < searchRoots.Length; index++)
         {
-            issues.AddRange(rootIssues);
+            issues.AddRange(filesystemIssues[index]);
+            counters.AddFilesystemCounters(filesystemCounters[index]);
+        }
+        int directoryLimitedRootCount = filesystemCounters.Count(rootCounters =>
+            rootCounters.DirectoryLimitReached);
+        if (directoryLimitedRootCount > 0)
+        {
+            issues.Add(new DiscoveryIssue(
+                "installation-filesystem-scan",
+                $"{directoryLimitedRootCount} filesystem search root(s) reached the "
+                    + $"per-root limit of {_options.MaximumDirectories} "
+                    + "directories. Expected installation paths were scanned "
+                    + "before unrelated directories."));
         }
 
         DiscoverRunningApplications(
@@ -224,14 +245,12 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             counters,
             cancellationToken);
 
-        if (registryTask is not null)
+        if (registryBatch is not null)
         {
-            RegistryDiscoveryBatch batch =
-                registryTask.GetAwaiter().GetResult();
-            issues.AddRange(batch.Issues);
-            counters.RegistryRecordCount = batch.Records.Count;
+            issues.AddRange(registryBatch.Issues);
+            counters.RegistryRecordCount = registryBatch.Records.Count;
             DiscoverRegisteredApplications(
-                batch.Records,
+                registryBatch.Records,
                 installations,
                 cancellationToken);
         }
@@ -512,6 +531,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         List<DiscoveryIssue> issues,
         ScanCounters counters,
         object installationSync,
+        IReadOnlyList<string> priorityPaths,
         CancellationToken cancellationToken)
     {
         if (!Directory.Exists(searchRoot))
@@ -519,14 +539,23 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             return;
         }
 
-        Queue<(string Path, int Depth)> pending = new();
-        pending.Enqueue((Path.GetFullPath(searchRoot), 0));
+        PriorityQueue<
+            (string Path, int Depth),
+            (int Rank, int Depth, long Sequence)> pending = new();
+        long sequence = 0;
+        string fullSearchRoot = Path.GetFullPath(searchRoot);
+        pending.Enqueue(
+            (fullSearchRoot, 0),
+            (GetPathPriority(fullSearchRoot, priorityPaths), 0, sequence++));
 
-        while (pending.TryDequeue(out (string Path, int Depth) current))
+        while (pending.TryDequeue(
+            out (string Path, int Depth) current,
+            out _))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!counters.TryClaimDirectory(_options.MaximumDirectories))
             {
+                counters.MarkDirectoryLimitReached();
                 counters.AddTruncatedDirectories(pending.Count + 1);
                 return;
             }
@@ -593,7 +622,13 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 {
                     if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
                     {
-                        pending.Enqueue((directory, current.Depth + 1));
+                        int depth = current.Depth + 1;
+                        pending.Enqueue(
+                            (directory, depth),
+                            (
+                                GetPathPriority(directory, priorityPaths),
+                                depth,
+                                sequence++));
                     }
                 }
                 catch (Exception exception) when (
@@ -604,6 +639,106 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 }
             }
         }
+    }
+
+    private string[] GetPrioritySearchPaths(
+        string searchRoot,
+        IReadOnlyList<ProcessSnapshotEntry> runningProcesses,
+        IReadOnlyList<InstalledProgramRecord> registeredPrograms)
+    {
+        string normalizedSearchRoot =
+            NormalizePriorityComparisonPath(searchRoot);
+        IEnumerable<string?> paths = _options.PrioritySearchPaths
+            .Cast<string?>()
+            .Concat(KnownInstallSpecs.SelectMany(spec =>
+                spec.SpecialFolders.Select(folder =>
+                {
+                    string root = Environment.GetFolderPath(folder);
+                    return string.IsNullOrWhiteSpace(root)
+                        ? null
+                        : Path.Combine(root, spec.RelativePath);
+                })))
+            .Concat(runningProcesses.Select(process =>
+                GetDirectoryNameOrNull(process.ExecutablePath)))
+            .Concat(registeredPrograms.Select(program =>
+                program.InstallLocation));
+        return paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(NormalizePriorityPath)
+            .Where(path => path is not null)
+            .Select(path => NormalizePriorityComparisonPath(path!))
+            .Where(path => AreNormalizedPathsRelated(
+                normalizedSearchRoot,
+                path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string? NormalizePriorityPath(string? path)
+    {
+        try
+        {
+            return Path.GetFullPath(path!);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or IOException
+                or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string? GetDirectoryNameOrNull(string? path)
+    {
+        try
+        {
+            return string.IsNullOrWhiteSpace(path)
+                ? null
+                : Path.GetDirectoryName(path);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or IOException
+                or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static int GetPathPriority(
+        string path,
+        IReadOnlyList<string> priorityPaths)
+    {
+        string normalizedPath = NormalizePriorityComparisonPath(path);
+        return priorityPaths.Any(priorityPath =>
+            AreNormalizedPathsRelated(normalizedPath, priorityPath))
+                ? 0
+                : 1;
+    }
+
+    private static string NormalizePriorityComparisonPath(string path)
+    {
+        return Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar);
+    }
+
+    private static bool AreNormalizedPathsRelated(
+        string first,
+        string second)
+    {
+        return IsSameOrDescendant(first, second)
+            || IsSameOrDescendant(second, first);
+    }
+
+    private static bool IsSameOrDescendant(string path, string parent)
+    {
+        return path.Equals(
+                parent,
+                StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(
+                parent + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AddMarkerInstallation(
@@ -1470,6 +1605,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         private int _inaccessibleDirectoryCount;
         private int _truncatedDirectoryCount;
         private int _reportedAccessIssueCount;
+        private int _directoryLimitReached;
 
         public int DirectoryCount => Volatile.Read(ref _directoryCount);
 
@@ -1482,6 +1618,9 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
         public int TruncatedDirectoryCount =>
             Volatile.Read(ref _truncatedDirectoryCount);
+
+        public bool DirectoryLimitReached =>
+            Volatile.Read(ref _directoryLimitReached) != 0;
 
         public int RegistryRecordCount { get; set; }
 
@@ -1522,6 +1661,11 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             Interlocked.Add(ref _truncatedDirectoryCount, count);
         }
 
+        public void MarkDirectoryLimitReached()
+        {
+            Interlocked.Exchange(ref _directoryLimitReached, 1);
+        }
+
         public bool TryClaimReportedAccessIssue(int maximumIssues)
         {
             while (true)
@@ -1540,6 +1684,18 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                     return true;
                 }
             }
+        }
+
+        public void AddFilesystemCounters(ScanCounters counters)
+        {
+            Interlocked.Add(ref _directoryCount, counters.DirectoryCount);
+            Interlocked.Add(ref _markerFileCount, counters.MarkerFileCount);
+            Interlocked.Add(
+                ref _inaccessibleDirectoryCount,
+                counters.InaccessibleDirectoryCount);
+            Interlocked.Add(
+                ref _truncatedDirectoryCount,
+                counters.TruncatedDirectoryCount);
         }
     }
 
