@@ -212,6 +212,20 @@ public partial class MainWindow : Window
         _viewModel.RemoveSelectedCommandLineTemplate();
     }
 
+    private void AddCommandLineSuggestion_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _viewModel.AddSelectedCommandLineSuggestion();
+    }
+
+    private void CommandLineSuggestion_MouseDoubleClick(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        _viewModel.AddSelectedCommandLineSuggestion();
+    }
+
     private void Installations_Sorting(
         object sender,
         DataGridSortingEventArgs e)

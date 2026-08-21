@@ -184,6 +184,12 @@ install context menus. Process relaunch is limited to live browser-role
 processes and is unavailable for WebView2, hosts, renderers, GPU processes, and
 utility processes; install launch is also unavailable for WebView2.
 
+The argument picker searches a checked-in catalog generated from
+[peter.sh's Chromium command-line switch reference](https://peter.sh/experiments/chromium-command-line-switches/)
+and the feature flags published on the same page. It also includes complete
+arguments observed on currently running Chromium processes. Double-click an
+entry or use **Add selected argument** to append it to the current template.
+
 Process-tree badges use a stable category palette:
 
 - purple identifies the platform or product, such as CEF, WebView2, Electron,

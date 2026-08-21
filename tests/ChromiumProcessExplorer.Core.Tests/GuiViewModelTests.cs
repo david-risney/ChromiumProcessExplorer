@@ -872,6 +872,114 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
+    public void ChromiumCommandLineCatalogContainsSwitchesAndFeatures()
+    {
+        Assert.True(ChromiumCommandLineCatalog.Entries.Count >= 4000);
+        Assert.Contains(
+            ChromiumCommandLineCatalog.Entries,
+            entry => entry.Argument == "--remote-debugging-port"
+                && entry.Kind == "Switch");
+        Assert.Contains(
+            ChromiumCommandLineCatalog.Entries,
+            entry => entry.Argument == "--enable-features=Vulkan"
+                && entry.Kind == "Feature");
+    }
+
+    [Fact]
+    public async Task CommandLineSuggestionSearchAddsSelectedArgumentOnce()
+    {
+        using MainViewModel viewModel = new(
+            new StubGuiDiscoveryService(),
+            new StubIconProvider());
+
+        viewModel.CommandLineSuggestionFilter = "VulkanFromANGLE";
+        await Task.Delay(300);
+
+        CommandLineSuggestionViewModel suggestion = Assert.Single(
+            viewModel.FilteredCommandLineSuggestions);
+        Assert.Equal(
+            "--enable-features=VulkanFromANGLE",
+            suggestion.Argument);
+        viewModel.SelectedCommandLineSuggestion = suggestion;
+        viewModel.AddSelectedCommandLineSuggestion();
+        viewModel.AddSelectedCommandLineSuggestion();
+
+        Assert.Equal(
+            1,
+            viewModel.SelectedCommandLineTemplate!.AddPartsText.Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries).Count(
+                argument => argument
+                    == "--enable-features=VulkanFromANGLE"));
+    }
+
+    [Fact]
+    public async Task CommandLineSuggestionsIncludeRunningProcessArguments()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true) with
+        {
+            CommandLine = "chrome.exe --custom-running-switch=value",
+        };
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process],
+                    new ProcessGraph([process], []))),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        await viewModel.RefreshProcessesAsync();
+        viewModel.CommandLineSuggestionFilter = "custom-running-switch";
+        await Task.Delay(300);
+
+        CommandLineSuggestionViewModel suggestion = Assert.Single(
+            viewModel.FilteredCommandLineSuggestions);
+        Assert.Equal(
+            "--custom-running-switch=value",
+            suggestion.Argument);
+        Assert.Equal("Running processes", suggestion.Origin);
+        Assert.Contains("chrome.exe", suggestion.Description);
+    }
+
+    [Fact]
+    public async Task ProcessRefreshCancelsPendingSuggestionSearch()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true) with
+        {
+            CommandLine = "chrome.exe --custom-running-switch=value",
+        };
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process],
+                    new ProcessGraph([process], []))),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        viewModel.CommandLineSuggestionFilter = "custom-running-switch";
+        await viewModel.RefreshProcessesAsync();
+        await Task.Delay(300);
+
+        CommandLineSuggestionViewModel suggestion = Assert.Single(
+            viewModel.FilteredCommandLineSuggestions);
+        Assert.Equal(
+            "--custom-running-switch=value",
+            suggestion.Argument);
+    }
+
+    [Fact]
     public async Task BrowserTemplateLaunchUsesOriginalArguments()
     {
         ProcessSnapshotEntry process = CreateProcess(

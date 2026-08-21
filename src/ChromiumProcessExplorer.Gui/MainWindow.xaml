@@ -856,6 +856,44 @@
                                                  FontFamily="Consolas"
                                                  Text="{Binding AddPartsText, UpdateSourceTrigger=PropertyChanged}"
                                                  VerticalScrollBarVisibility="Auto" />
+                                        <Separator Margin="0,12,0,10" />
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="Find Chromium arguments" />
+                                        <TextBlock Margin="0,2,0,5"
+                                                   Foreground="#FF5B6472"
+                                                   Text="Search the generated Chromium catalog and arguments observed on currently running processes."
+                                                   TextWrapping="Wrap" />
+                                        <TextBox Padding="6"
+                                                 Text="{Binding DataContext.CommandLineSuggestionFilter, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="Search switch names, feature names, and descriptions" />
+                                        <DataGrid Height="230"
+                                                  Margin="0,8,0,0"
+                                                  ItemsSource="{Binding DataContext.FilteredCommandLineSuggestions, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  MouseDoubleClick="CommandLineSuggestion_MouseDoubleClick"
+                                                  SelectedItem="{Binding DataContext.SelectedCommandLineSuggestion, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Argument"
+                                                                    Binding="{Binding Argument}"
+                                                                    Width="2*" />
+                                                <DataGridTextColumn Header="Type"
+                                                                    Binding="{Binding Kind}" />
+                                                <DataGridTextColumn Header="Origin"
+                                                                    Binding="{Binding Origin}" />
+                                                <DataGridTextColumn Header="Description"
+                                                                    Binding="{Binding Description}"
+                                                                    Width="3*" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                        <DockPanel Margin="0,8,0,0">
+                                            <Button DockPanel.Dock="Right"
+                                                    Padding="12,4"
+                                                    Click="AddCommandLineSuggestion_Click"
+                                                    Content="Add selected argument" />
+                                            <TextBlock VerticalAlignment="Center"
+                                                       Foreground="#FF5B6472"
+                                                       Text="{Binding DataContext.CommandLineSuggestionStatus, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                        </DockPanel>
                                     </StackPanel>
                                 </GroupBox>
                                 <GroupBox Header="Command line parts to remove"

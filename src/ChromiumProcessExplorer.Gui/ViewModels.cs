@@ -333,9 +333,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _installationRefreshCancellation;
     private CancellationTokenSource? _selectionCancellation;
     private CancellationTokenSource? _installationFilterCancellation;
+    private CancellationTokenSource? _commandLineSuggestionCancellation;
     private CancellationTokenSource? _autoRefreshCancellation;
     private Task? _autoRefreshTask;
     private Task? _installationFilterTask;
+    private Task? _commandLineSuggestionTask;
     private ChromiumDiscoveryResult? _processResult;
     private DiagnosticArtifactDiscoveryResult? _diagnosticsResult;
     private Task<DiagnosticArtifactDiscoveryResult>? _diagnosticsTask;
@@ -359,6 +361,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _processExplorerCommand;
     private string _additionalInstallationFoldersText;
     private string _settingsStatus;
+    private string _commandLineSuggestionFilter = string.Empty;
+    private string _commandLineSuggestionStatus = string.Empty;
+    private CommandLineSuggestionViewModel? _selectedCommandLineSuggestion;
+    private CommandLineSuggestionViewModel[] _commandLineSuggestions = [];
 
     public MainViewModel(
         IGuiDiscoveryService discovery,
@@ -391,6 +397,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         SelectedCommandLineTemplate = CommandLineTemplates.FirstOrDefault();
+        RebuildCommandLineSuggestions([]);
         _autoRefreshInterval = autoRefreshInterval ?? TimeSpan.FromSeconds(2);
         if (_autoRefreshInterval <= TimeSpan.Zero)
         {
@@ -420,6 +427,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<CommandLineTemplateViewModel>
         CommandLineTemplates
+    { get; } = [];
+
+    public ObservableCollection<CommandLineSuggestionViewModel>
+        FilteredCommandLineSuggestions
     { get; } = [];
 
     public ProcessTreeItemViewModel? SelectedProcess
@@ -467,6 +478,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         get => _selectedCommandLineTemplate;
         set => SetField(ref _selectedCommandLineTemplate, value);
+    }
+
+    public CommandLineSuggestionViewModel? SelectedCommandLineSuggestion
+    {
+        get => _selectedCommandLineSuggestion;
+        set => SetField(ref _selectedCommandLineSuggestion, value);
+    }
+
+    public string CommandLineSuggestionFilter
+    {
+        get => _commandLineSuggestionFilter;
+        set
+        {
+            if (SetField(ref _commandLineSuggestionFilter, value))
+            {
+                ScheduleCommandLineSuggestionFilter();
+            }
+        }
+    }
+
+    public string CommandLineSuggestionStatus
+    {
+        get => _commandLineSuggestionStatus;
+        private set => SetField(ref _commandLineSuggestionStatus, value);
     }
 
     public string ProcessFilter
@@ -623,6 +658,29 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(ProcessExpansionButtonText));
             }
         }
+    }
+
+    public void AddSelectedCommandLineSuggestion()
+    {
+        if (SelectedCommandLineTemplate is null
+            || SelectedCommandLineSuggestion is null)
+        {
+            return;
+        }
+
+        string argument = SelectedCommandLineSuggestion.Argument;
+        string[] existing = SelectedCommandLineTemplate.AddPartsText.Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries
+                | StringSplitOptions.TrimEntries);
+        if (existing.Contains(argument, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        SelectedCommandLineTemplate.AddPartsText = string.Join(
+            Environment.NewLine,
+            existing.Append(argument));
     }
 
     public async Task RefreshProcessesAsync()
@@ -851,6 +909,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _installationFilterCancellation?.Cancel();
         _installationFilterCancellation?.Dispose();
         _installationFilterCancellation = null;
+        _commandLineSuggestionCancellation?.Cancel();
+        _commandLineSuggestionCancellation?.Dispose();
+        _commandLineSuggestionCancellation = null;
         GC.SuppressFinalize(this);
     }
 
@@ -1230,6 +1291,181 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             message => InstallationStatus = message);
     }
 
+    private void RebuildCommandLineSuggestions(
+        IReadOnlyList<ProcessSnapshotEntry> processes)
+    {
+        _commandLineSuggestionCancellation?.Cancel();
+        _commandLineSuggestionCancellation?.Dispose();
+        _commandLineSuggestionCancellation = null;
+
+        Dictionary<string, HashSet<string>> observed =
+            new(StringComparer.OrdinalIgnoreCase);
+        foreach (ProcessSnapshotEntry process in processes)
+        {
+            if (string.IsNullOrWhiteSpace(process.CommandLine))
+            {
+                continue;
+            }
+
+            ChromiumCommandLine parsed;
+            try
+            {
+                parsed = ChromiumCommandLine.Parse(process.CommandLine);
+            }
+            catch (Win32Exception)
+            {
+                continue;
+            }
+
+            foreach (string argument in parsed.Arguments.Skip(1)
+                .Where(argument => !string.IsNullOrWhiteSpace(argument)))
+            {
+                if (!observed.TryGetValue(
+                        argument,
+                        out HashSet<string>? executables))
+                {
+                    executables = new HashSet<string>(
+                        StringComparer.OrdinalIgnoreCase);
+                    observed[argument] = executables;
+                }
+
+                executables.Add(process.ImageName);
+            }
+        }
+
+        Dictionary<string, CommandLineSuggestionViewModel> suggestions =
+            ChromiumCommandLineCatalog.Entries
+                .GroupBy(
+                    entry => entry.Argument,
+                    StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    group => group.Key,
+                    group =>
+                    {
+                        ChromiumCommandLineCatalogEntry entry = group.First();
+                        return new CommandLineSuggestionViewModel(
+                            entry.Kind,
+                            entry.Argument,
+                            entry.Description,
+                            "Chromium catalog");
+                    },
+                    StringComparer.OrdinalIgnoreCase);
+        foreach ((string argument, HashSet<string> executables) in observed)
+        {
+            string observedDescription = "Observed on "
+                + string.Join(
+                    ", ",
+                    executables.Order(StringComparer.OrdinalIgnoreCase));
+            if (suggestions.TryGetValue(
+                    argument,
+                    out CommandLineSuggestionViewModel? documented))
+            {
+                suggestions[argument] = documented with
+                {
+                    Description = string.IsNullOrWhiteSpace(
+                        documented.Description)
+                        ? observedDescription
+                        : $"{documented.Description} {observedDescription}",
+                    Origin = "Catalog + running",
+                };
+            }
+            else
+            {
+                suggestions[argument] = new CommandLineSuggestionViewModel(
+                    "Observed",
+                    argument,
+                    observedDescription,
+                    "Running processes");
+            }
+        }
+
+        _commandLineSuggestions = suggestions.Values
+            .OrderBy(
+                suggestion => suggestion.Origin == "Running processes"
+                    || suggestion.Origin == "Catalog + running"
+                        ? 0
+                        : 1)
+            .ThenBy(
+                suggestion => suggestion.Argument,
+                StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        ApplyCommandLineSuggestionFilter(CommandLineSuggestionFilter);
+    }
+
+    private void ScheduleCommandLineSuggestionFilter()
+    {
+        _commandLineSuggestionCancellation?.Cancel();
+        _commandLineSuggestionCancellation?.Dispose();
+        CancellationTokenSource cancellation = new();
+        _commandLineSuggestionCancellation = cancellation;
+        string filter = CommandLineSuggestionFilter;
+        CommandLineSuggestionViewModel[] suggestions =
+            _commandLineSuggestions;
+        _commandLineSuggestionTask = ApplyAsync();
+
+        async Task ApplyAsync()
+        {
+            try
+            {
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(150),
+                    cancellation.Token);
+                CommandLineSuggestionViewModel[] matches = await Task.Run(
+                    () => FilterCommandLineSuggestions(suggestions, filter),
+                    cancellation.Token);
+                if (!cancellation.IsCancellationRequested
+                    && string.Equals(
+                        filter,
+                        CommandLineSuggestionFilter,
+                        StringComparison.Ordinal))
+                {
+                    ApplyCommandLineSuggestionMatches(matches);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    private void ApplyCommandLineSuggestionFilter(string filter)
+    {
+        ApplyCommandLineSuggestionMatches(
+            FilterCommandLineSuggestions(_commandLineSuggestions, filter));
+    }
+
+    private static CommandLineSuggestionViewModel[]
+        FilterCommandLineSuggestions(
+            IReadOnlyList<CommandLineSuggestionViewModel> suggestions,
+            string filterValue)
+    {
+        string filter = filterValue.Trim();
+        return suggestions.Where(suggestion =>
+                filter.Length == 0
+                || suggestion.Argument.Contains(
+                    filter,
+                    StringComparison.OrdinalIgnoreCase)
+                || suggestion.Description.Contains(
+                    filter,
+                    StringComparison.OrdinalIgnoreCase)
+                || suggestion.Kind.Contains(
+                    filter,
+                    StringComparison.OrdinalIgnoreCase))
+            .Take(500)
+            .ToArray();
+    }
+
+    private void ApplyCommandLineSuggestionMatches(
+        CommandLineSuggestionViewModel[] matches)
+    {
+        Replace(FilteredCommandLineSuggestions, matches);
+        SelectedCommandLineSuggestion =
+            FilteredCommandLineSuggestions.FirstOrDefault();
+        CommandLineSuggestionStatus =
+            $"Showing {matches.Length} of {_commandLineSuggestions.Length} "
+            + "documented and observed arguments.";
+    }
+
     private string[] GetAdditionalInstallationFolders()
     {
         return AdditionalInstallationFoldersText
@@ -1385,6 +1621,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         MergeNewlyExited(previousRoots, currentRoots, currentIdentities);
         Replace(ProcessRoots, currentRoots);
         _processResult = result;
+        RebuildCommandLineSuggestions(result.Processes);
         _mojoPipeFingerprint = CreateMojoFingerprint(
             result.MojoPipeInspection.Pipes.Select(pipe => pipe.Name));
         _diagnosticsResult = null;
