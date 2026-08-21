@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows.Media;
+using ChromiumProcessExplorer.Core;
 using ChromiumProcessExplorer.Core.Discovery;
 
 namespace ChromiumProcessExplorer.Gui;
@@ -165,6 +167,10 @@ public sealed class ProcessInspectorViewModel
 
     public required string? CommandLine { get; init; }
 
+    public required string? PackageFullName { get; init; }
+
+    public required bool PackageIdentityKnown { get; init; }
+
     public required IReadOnlyList<PropertyRow> Summary { get; init; }
 
     public required IReadOnlyList<RelationshipDetailRow> Relationships { get; init; }
@@ -305,6 +311,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private readonly IGuiDiscoveryService _discovery;
     private readonly IProcessIconProvider _iconProvider;
+    private readonly IExternalToolService _externalTools;
+    private readonly IGuiSettingsStore? _settingsStore;
+    private readonly string _productName = "Chromium Process Explorer";
+    private readonly string _productVersion =
+        ChromiumProcessExplorer.Core.ProductVersion.Version;
     private readonly Dictionary<ProcessIdentity, ProcessInspectorViewModel>
         _inspectorCache = [];
     private readonly HashSet<string> _dismissedProcessNotices =
@@ -336,15 +347,35 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isRefreshingProcesses;
     private bool _isScanningInstallations;
     private bool _isLoadingSelection;
+    private string _debugCommand;
+    private string _futureDebuggerCommand;
+    private string _processExplorerCommand;
+    private string _additionalInstallationFoldersText;
+    private string _settingsStatus;
 
     public MainViewModel(
         IGuiDiscoveryService discovery,
         IProcessIconProvider? iconProvider = null,
-        TimeSpan? autoRefreshInterval = null)
+        TimeSpan? autoRefreshInterval = null,
+        GuiSettings? settings = null,
+        IGuiSettingsStore? settingsStore = null,
+        IExternalToolService? externalTools = null,
+        string? settingsLoadError = null)
     {
         ArgumentNullException.ThrowIfNull(discovery);
         _discovery = discovery;
         _iconProvider = iconProvider ?? new WindowsProcessIconProvider();
+        _externalTools = externalTools ?? new WindowsExternalToolService();
+        _settingsStore = settingsStore;
+        GuiSettings initialSettings = settings ?? new GuiSettings();
+        _autoRefreshProcesses = initialSettings.AutoRefreshProcesses;
+        _debugCommand = initialSettings.DebugCommand;
+        _futureDebuggerCommand = initialSettings.FutureDebuggerCommand;
+        _processExplorerCommand = initialSettings.ProcessExplorerCommand;
+        _additionalInstallationFoldersText = string.Join(
+            Environment.NewLine,
+            initialSettings.AdditionalInstallationFolders);
+        _settingsStatus = settingsLoadError ?? "Settings are saved automatically.";
         _autoRefreshInterval = autoRefreshInterval ?? TimeSpan.FromSeconds(2);
         if (_autoRefreshInterval <= TimeSpan.Zero)
         {
@@ -487,7 +518,71 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public bool AutoRefreshProcesses
     {
         get => _autoRefreshProcesses;
-        set => SetField(ref _autoRefreshProcesses, value);
+        set
+        {
+            if (SetField(ref _autoRefreshProcesses, value))
+            {
+                SaveSettings();
+            }
+        }
+    }
+
+    public string ProductName => _productName;
+
+    public string ProductVersion => _productVersion;
+
+    public string DebugCommand
+    {
+        get => _debugCommand;
+        set
+        {
+            if (SetField(ref _debugCommand, value))
+            {
+                SaveSettings();
+            }
+        }
+    }
+
+    public string FutureDebuggerCommand
+    {
+        get => _futureDebuggerCommand;
+        set
+        {
+            if (SetField(ref _futureDebuggerCommand, value))
+            {
+                SaveSettings();
+            }
+        }
+    }
+
+    public string ProcessExplorerCommand
+    {
+        get => _processExplorerCommand;
+        set
+        {
+            if (SetField(ref _processExplorerCommand, value))
+            {
+                SaveSettings();
+            }
+        }
+    }
+
+    public string AdditionalInstallationFoldersText
+    {
+        get => _additionalInstallationFoldersText;
+        set
+        {
+            if (SetField(ref _additionalInstallationFoldersText, value))
+            {
+                SaveSettings();
+            }
+        }
+    }
+
+    public string SettingsStatus
+    {
+        get => _settingsStatus;
+        private set => SetField(ref _settingsStatus, value);
     }
 
     public string ProcessExpansionButtonText =>
@@ -541,7 +636,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 _installationFilterCancellation?.Cancel();
                 string? selectedPath = SelectedInstallation?.InstallPath;
                 InstallationDiscoveryResult result =
-                    await _discovery.DiscoverInstallationsAsync(cancellationToken);
+                    await _discovery.DiscoverInstallationsAsync(
+                        GetAdditionalInstallationFolders(),
+                        cancellationToken);
                 Replace(
                     Installations,
                     result.Installations
@@ -892,6 +989,204 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return text.ToString().TrimEnd();
     }
 
+    public void DebugProcess(ProcessTreeItemViewModel? process)
+    {
+        if (process is null || process.IsStale)
+        {
+            AddProcessActionIssue(
+                "Select a running process before starting a debugger.");
+            return;
+        }
+
+        RunProcessAction(
+            () => _externalTools.DebugProcess(
+                process.ProcessId,
+                DebugCommand),
+            $"Started debugger for PID {process.ProcessId}.");
+    }
+
+    public void OpenProcessExplorer(ProcessTreeItemViewModel? process)
+    {
+        if (process is null || process.IsStale)
+        {
+            AddProcessActionIssue(
+                "Select a running process before opening Process Explorer.");
+            return;
+        }
+
+        RunProcessAction(
+            () => _externalTools.OpenProcessExplorer(
+                process.ProcessId,
+                ProcessExplorerCommand),
+            $"Opened Process Explorer for PID {process.ProcessId}.");
+    }
+
+    public async Task DebugFutureLaunchesAsync(
+        ProcessTreeItemViewModel? process)
+    {
+        if (process is null)
+        {
+            AddProcessActionIssue(
+                "Select a process before configuring future debugging.");
+            return;
+        }
+
+        await SelectProcessAsync(process);
+        string? packageFullName = ProcessInspector?.Identity == process.Identity
+            ? ProcessInspector.PackageFullName
+            : null;
+        if (ProcessInspector?.Identity != process.Identity
+            || !ProcessInspector.PackageIdentityKnown)
+        {
+            AddProcessActionIssue(
+                "Package identity could not be determined; future debugging was not changed.");
+            return;
+        }
+
+        RunProcessAction(
+            () => _externalTools.DebugFutureLaunches(
+                process.ImageName,
+                packageFullName,
+                FutureDebuggerCommand),
+            packageFullName is null
+                ? $"Started elevated future-debug setup for {process.ImageName}."
+                : $"Started elevated packaged-app debug setup for {packageFullName}.");
+    }
+
+    public void DebugFutureLaunches(
+        InstallationItemViewModel? installation)
+    {
+        if (installation is null)
+        {
+            AddInstallationActionIssue(
+                "Select an install before configuring future debugging.");
+            return;
+        }
+
+        string? imageName = installation.Installation.ExecutablePath is string path
+            ? Path.GetFileName(path)
+            : null;
+        if (string.IsNullOrWhiteSpace(imageName))
+        {
+            AddInstallationActionIssue(
+                "The selected install has no executable to configure.");
+            return;
+        }
+
+        try
+        {
+            _externalTools.DebugFutureLaunches(
+                imageName,
+                installation.Installation.Metadata.PackageIdentity
+                    ?.PackageFullName,
+                FutureDebuggerCommand);
+            InstallationStatus = "Started elevated future-debug setup for "
+                + $"{installation.Name}.";
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or FormatException
+            or InvalidOperationException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            AddInstallationActionIssue(exception.Message);
+        }
+    }
+
+    private string[] GetAdditionalInstallationFolders()
+    {
+        return AdditionalInstallationFoldersText
+            .Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries
+                    | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private void SaveSettings()
+    {
+        if (_settingsStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _settingsStore.Save(new GuiSettings
+            {
+                AutoRefreshProcesses = AutoRefreshProcesses,
+                DebugCommand = DebugCommand,
+                FutureDebuggerCommand = FutureDebuggerCommand,
+                ProcessExplorerCommand = ProcessExplorerCommand,
+                AdditionalInstallationFolders =
+                    GetAdditionalInstallationFolders(),
+            });
+            SettingsStatus = "Settings saved.";
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or System.Security.SecurityException)
+        {
+            SettingsStatus = $"Settings could not be saved: {exception.Message}";
+        }
+    }
+
+    private void RunProcessAction(Action action, string successStatus)
+    {
+        try
+        {
+            action();
+            Status = successStatus;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or FormatException
+            or InvalidOperationException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            AddProcessActionIssue(exception.Message);
+        }
+    }
+
+    private void AddProcessActionIssue(string message)
+    {
+        if (!ProcessNotices.Any(notice =>
+            string.Equals(
+                notice.Message,
+                message,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            ProcessNotices.Add(new ContextIssueViewModel(
+                "external-tool",
+                message));
+        }
+
+        Status = message;
+    }
+
+    private void AddInstallationActionIssue(string message)
+    {
+        if (!InstallationNotices.Any(notice =>
+            string.Equals(
+                notice.Message,
+                message,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            InstallationNotices.Add(new ContextIssueViewModel(
+                "external-tool",
+                message));
+        }
+
+        InstallationStatus = message;
+    }
+
     private async Task ApplyProcessResultAsync(
         ChromiumDiscoveryResult result,
         CancellationToken cancellationToken)
@@ -1007,6 +1302,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IsLoadingDiagnostics = false,
             Icon = item.Icon ?? source.Icon,
             CommandLine = source.CommandLine,
+            PackageFullName = source.PackageFullName,
+            PackageIdentityKnown = source.PackageIdentityKnown,
             Summary = source.Summary
                 .Select(row => row.Label == "State"
                     ? row with { Value = "Exited" }
@@ -1417,6 +1714,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             Icon = item.Icon,
             CommandLine = detail?.CommandLine.Value
                 ?? snapshot.CommandLine,
+            PackageFullName = detail?.PackageFullName,
+            PackageIdentityKnown = detail is not null,
             Summary =
             [
                 new("Process ID", item.ProcessId.ToString(

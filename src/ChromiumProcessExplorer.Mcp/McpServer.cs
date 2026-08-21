@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ChromiumProcessExplorer.Core;
 using ChromiumProcessExplorer.Core.Broker;
 
 namespace ChromiumProcessExplorer.Mcp;
@@ -72,7 +73,7 @@ public sealed class McpServer(
                             serverInfo = new
                             {
                                 name = "chromium-process-explorer",
-                                version = "1.0",
+                                version = ProductVersion.Version,
                             },
                         }),
                     "ping" => Result(id, new { }),

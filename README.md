@@ -160,6 +160,20 @@ Install versions sort by their numeric components, channels sort Stable, Beta,
 Dev, Canary, Internal, then FixedApp, and app-bundled runtimes are labeled
 `FixedApp`.
 
+Process context menus can launch the configured debugger for the selected PID,
+open Process Explorer at that PID, or configure future-launch debugging.
+Desktop executables use the Image File Execution Options `Debugger` value;
+packaged processes and installs use `PLMDebug /enableDebug`. Future-launch
+configuration starts a narrowly scoped elevated copy of the GUI because these
+Windows debugging registrations require administrator access.
+
+The Settings tab displays the application identity and shared product version,
+and configures debugger, future-debugger, and Process Explorer command lines.
+`{pid}` is replaced in direct-debug and Process Explorer commands. Settings also
+allow extra installation search folders and remember the process auto-refresh
+choice. They are saved to
+`%LOCALAPPDATA%\ChromiumProcessExplorer\settings.json`.
+
 Process-tree badges use a stable category palette:
 
 - purple identifies the platform or product, such as CEF, WebView2, Electron,

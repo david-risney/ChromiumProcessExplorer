@@ -100,6 +100,11 @@ public sealed record WindowsInstallationDiscoveryOptions
     /// </summary>
     public IReadOnlyList<string>? SearchRoots { get; init; }
 
+    /// <summary>
+    /// Gets extra filesystem roots appended to the default or explicit roots.
+    /// </summary>
+    public IReadOnlyList<string> AdditionalSearchRoots { get; init; } = [];
+
     /// <summary>Gets whether well-known browser and WebView2 locations are checked.</summary>
     public bool IncludeKnownLocations { get; init; } = true;
 

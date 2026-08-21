@@ -190,11 +190,39 @@ public sealed class ChromiumProcessDiscovery
         int? maximumProcessConcurrency = null,
         CancellationToken cancellationToken = default)
     {
+        return await DiscoverInstallationsCoreAsync(
+            _installationProvider,
+            maximumProcessConcurrency,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Discovers installations using explicit Windows filesystem options.
+    /// </summary>
+    public async ValueTask<InstallationDiscoveryResult>
+        DiscoverInstallationsWithOptionsAsync(
+        WindowsInstallationDiscoveryOptions options,
+        int? maximumProcessConcurrency = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return await DiscoverInstallationsCoreAsync(
+            new WindowsInstallationProvider(options),
+            maximumProcessConcurrency,
+            cancellationToken);
+    }
+
+    private async ValueTask<InstallationDiscoveryResult>
+        DiscoverInstallationsCoreAsync(
+            IInstallationProvider provider,
+            int? maximumProcessConcurrency,
+            CancellationToken cancellationToken)
+    {
         IReadOnlyList<ProcessSnapshotEntry> processes =
             await _processSnapshotter.CaptureAsync(
                 maximumProcessConcurrency,
                 cancellationToken);
-        return await _installationProvider.DiscoverAsync(
+        return await provider.DiscoverAsync(
             processes,
             cancellationToken);
     }

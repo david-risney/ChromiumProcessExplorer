@@ -14,10 +14,7 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
 
     public MainWindow()
-        : this(new MainViewModel(new GuiDiscoveryService(
-            Environment.ProcessPath
-                ?? throw new InvalidOperationException(
-                    "The GUI executable path is unavailable."))))
+        : this(CreateViewModel())
     {
     }
 
@@ -81,6 +78,31 @@ public partial class MainWindow : Window
         }
     }
 
+    private void DebugProcess_Click(object sender, RoutedEventArgs e)
+    {
+        _viewModel.DebugProcess(
+            ((FrameworkElement)sender).DataContext
+                as ProcessTreeItemViewModel);
+    }
+
+    private async void DebugFutureProcess_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await _viewModel.DebugFutureLaunchesAsync(
+            ((FrameworkElement)sender).DataContext
+                as ProcessTreeItemViewModel);
+    }
+
+    private void OpenProcessExplorer_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _viewModel.OpenProcessExplorer(
+            ((FrameworkElement)sender).DataContext
+                as ProcessTreeItemViewModel);
+    }
+
     private async void CopyProcessDetails_Click(
         object sender,
         RoutedEventArgs e)
@@ -115,6 +137,16 @@ public partial class MainWindow : Window
             SetClipboardText(
                 MainViewModel.GetInstallationDetailsText(installation));
         }
+    }
+
+    private void DebugFutureInstallation_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _viewModel.DebugFutureLaunches(
+            (((FrameworkElement)sender).Tag
+                ?? ((FrameworkElement)sender).DataContext)
+                as InstallationItemViewModel);
     }
 
     private void Installations_Sorting(
@@ -278,5 +310,19 @@ public partial class MainWindow : Window
                 _ => 6,
             };
         }
+    }
+
+    private static MainViewModel CreateViewModel()
+    {
+        string executablePath = Environment.ProcessPath
+            ?? throw new InvalidOperationException(
+                "The GUI executable path is unavailable.");
+        JsonGuiSettingsStore settingsStore = new();
+        GuiSettingsLoadResult loadResult = settingsStore.Load();
+        return new MainViewModel(
+            new GuiDiscoveryService(executablePath),
+            settings: loadResult.Settings,
+            settingsStore: settingsStore,
+            settingsLoadError: loadResult.Error);
     }
 }

@@ -244,6 +244,13 @@
                                                           Click="CopyProcess_Click" />
                                                 <MenuItem Header="Copy Details"
                                                           Click="CopyProcessDetails_Click" />
+                                                <Separator />
+                                                <MenuItem Header="Debug"
+                                                          Click="DebugProcess_Click" />
+                                                <MenuItem Header="Debug Future Launches"
+                                                          Click="DebugFutureProcess_Click" />
+                                                <MenuItem Header="Process Explorer"
+                                                          Click="OpenProcessExplorer_Click" />
                                             </ContextMenu>
                                         </Grid.ContextMenu>
                                         <Grid.Style>
@@ -612,6 +619,10 @@
                                         <MenuItem Header="Copy Details"
                                                   Click="CopyInstallationDetails_Click"
                                                   Tag="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                        <Separator />
+                                        <MenuItem Header="Debug Future Launches"
+                                                  Click="DebugFutureInstallation_Click"
+                                                  Tag="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
                                     </ContextMenu>
                                 </DataGrid.ContextMenu>
                                 <DataGrid.Columns>
@@ -744,6 +755,102 @@
                         </GroupBox>
                     </ScrollViewer>
                 </Grid>
+            </TabItem>
+
+            <TabItem Header="Settings">
+                <ScrollViewer Margin="4"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel MaxWidth="900"
+                                HorizontalAlignment="Left">
+                        <Border Margin="0,0,0,12"
+                                Padding="18"
+                                Background="White"
+                                BorderBrush="#FFD8DDE6"
+                                BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="88" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Image Width="72"
+                                       Height="72"
+                                       Source="Assets/ChromiumProcessExplorer.png" />
+                                <StackPanel Grid.Column="1"
+                                            VerticalAlignment="Center">
+                                    <TextBlock FontSize="24"
+                                               FontWeight="SemiBold"
+                                               Text="{Binding ProductName}" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="#FF5B6472"
+                                               Text="{Binding ProductVersion, StringFormat=Version {0}}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <GroupBox Header="Process refresh"
+                                  Style="{StaticResource SectionCard}">
+                            <CheckBox Content="Automatically refresh when the Mojo pipe set changes"
+                                      IsChecked="{Binding AutoRefreshProcesses}" />
+                        </GroupBox>
+
+                        <GroupBox Header="External debugging tools"
+                                  Style="{StaticResource SectionCard}">
+                            <StackPanel>
+                                <TextBlock FontWeight="SemiBold"
+                                           Text="Debug command" />
+                                <TextBlock Margin="0,2,0,5"
+                                           Foreground="#FF5B6472"
+                                           Text="Use {pid} where the selected process ID should be inserted." />
+                                <TextBox Padding="6"
+                                         FontFamily="Consolas"
+                                         Text="{Binding DebugCommand, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Margin="0,14,0,0"
+                                           FontWeight="SemiBold"
+                                           Text="Future-launch debugger command" />
+                                <TextBlock Margin="0,2,0,5"
+                                           Foreground="#FF5B6472"
+                                           TextWrapping="Wrap"
+                                           Text="Stored in Image File Execution Options for desktop executables, or passed to PLMDebug for packaged apps." />
+                                <TextBox Padding="6"
+                                         FontFamily="Consolas"
+                                         Text="{Binding FutureDebuggerCommand, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Margin="0,14,0,0"
+                                           FontWeight="SemiBold"
+                                           Text="Process Explorer command" />
+                                <TextBlock Margin="0,2,0,5"
+                                           Foreground="#FF5B6472"
+                                           Text="Use {pid} where the selected process ID should be inserted." />
+                                <TextBox Padding="6"
+                                         FontFamily="Consolas"
+                                         Text="{Binding ProcessExplorerCommand, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="Installation discovery"
+                                  Style="{StaticResource SectionCard}">
+                            <StackPanel>
+                                <TextBlock Foreground="#FF5B6472"
+                                           Text="Additional folders to scan, one full path per line. Default Windows installation locations are still included."
+                                           TextWrapping="Wrap" />
+                                <TextBox MinHeight="110"
+                                         Margin="0,8,0,0"
+                                         Padding="6"
+                                         AcceptsReturn="True"
+                                         FontFamily="Consolas"
+                                         Text="{Binding AdditionalInstallationFoldersText, UpdateSourceTrigger=PropertyChanged}"
+                                         VerticalScrollBarVisibility="Auto" />
+                            </StackPanel>
+                        </GroupBox>
+
+                        <TextBlock Margin="4,0,4,12"
+                                   Foreground="#FF5B6472"
+                                   Text="{Binding SettingsStatus}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
         </TabControl>
     </DockPanel>

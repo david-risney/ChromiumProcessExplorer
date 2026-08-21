@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <Resource Include="Assets\ChromiumProcessExplorer.ico" />
+    <Resource Include="Assets\ChromiumProcessExplorer.png" />
   </ItemGroup>
 
 </Project>

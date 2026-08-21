@@ -18,6 +18,7 @@ public interface IGuiDiscoveryService
         CancellationToken cancellationToken);
 
     ValueTask<InstallationDiscoveryResult> DiscoverInstallationsAsync(
+        IReadOnlyList<string> additionalSearchRoots,
         CancellationToken cancellationToken);
 
 }
@@ -68,9 +69,15 @@ public sealed class GuiDiscoveryService : IGuiDiscoveryService
     }
 
     public async ValueTask<InstallationDiscoveryResult> DiscoverInstallationsAsync(
+        IReadOnlyList<string> additionalSearchRoots,
         CancellationToken cancellationToken)
     {
-        return await _discovery.DiscoverInstallationsAsync(
+        ArgumentNullException.ThrowIfNull(additionalSearchRoots);
+        return await _discovery.DiscoverInstallationsWithOptionsAsync(
+            new WindowsInstallationDiscoveryOptions
+            {
+                AdditionalSearchRoots = additionalSearchRoots,
+            },
             cancellationToken: cancellationToken);
     }
 }

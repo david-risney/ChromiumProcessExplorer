@@ -17,6 +17,15 @@ internal static class Program
                 .GetResult();
         }
 
+        if (args.Length > 0
+            && string.Equals(
+                args[0],
+                FutureDebugConfigurator.WorkerArgument,
+                StringComparison.Ordinal))
+        {
+            return FutureDebugConfigurator.Run(args);
+        }
+
         if (!OperatingSystem.IsWindows())
         {
             return 1;

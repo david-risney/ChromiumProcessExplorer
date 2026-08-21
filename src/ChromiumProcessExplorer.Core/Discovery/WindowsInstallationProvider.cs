@@ -719,7 +719,9 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
     private string[] GetSearchRoots()
     {
-        IEnumerable<string> roots = _options.SearchRoots ?? GetDefaultSearchRoots();
+        IEnumerable<string> roots =
+            (_options.SearchRoots ?? GetDefaultSearchRoots())
+                .Concat(_options.AdditionalSearchRoots);
         return roots
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Select(Path.GetFullPath)

@@ -119,6 +119,32 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task DiscoverAppendsAdditionalSearchRoots()
+    {
+        string applicationPath = Path.Combine(_root, "AdditionalCefApp");
+        Directory.CreateDirectory(applicationPath);
+        File.WriteAllText(
+            Path.Combine(applicationPath, "libcef.dll"),
+            string.Empty);
+        WindowsInstallationProvider provider = new(
+            new WindowsInstallationDiscoveryOptions(
+                [],
+                includeKnownLocations: false)
+            {
+                AdditionalSearchRoots = [_root],
+            });
+
+        InstallationDiscoveryResult result =
+            await provider.DiscoverAsync([]);
+
+        Assert.Contains(
+            result.Installations,
+            installation => installation.InstallPath == applicationPath
+                && installation.Platform == "CEF");
+        Assert.Equal(1, result.Statistics.SearchRootCount);
+    }
+
+    [Fact]
     public async Task DiscoverCombinesMarkerAndRunningProcessEvidence()
     {
         Directory.CreateDirectory(_root);
