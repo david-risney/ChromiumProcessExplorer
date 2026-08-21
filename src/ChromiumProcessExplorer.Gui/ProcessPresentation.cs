@@ -317,7 +317,74 @@ public static class ProcessPresentationTreeBuilder
             }
         }
 
+        AddInferredBrowserParents(
+            classifications,
+            snapshots,
+            result.ProcessGraph);
+
         return classifications;
+    }
+
+    private static void AddInferredBrowserParents(
+        Dictionary<int, Classification> classifications,
+        IReadOnlyDictionary<int, ProcessSnapshotEntry> snapshots,
+        ProcessGraph graph)
+    {
+        foreach (ProcessSnapshotEntry parent in snapshots.Values.Where(
+            process => !classifications.ContainsKey(process.ProcessId)))
+        {
+            Classification[] childClassifications = graph
+                .GetOutgoingEdges(new ProcessIdentity(
+                    parent.ProcessId,
+                    parent.CreationTime))
+                .Where(edge => edge.Type == ProcessRelationshipType.OsParent)
+                .Select(edge => snapshots.GetValueOrDefault(
+                    edge.Target.ProcessId))
+                .Where(child => child is not null
+                    && child.ChromiumProcessType is not null
+                    && IsSameExecutable(parent, child))
+                .Select(child => classifications.GetValueOrDefault(
+                    child!.ProcessId))
+                .Where(classification => classification is not null)
+                .Cast<Classification>()
+                .ToArray();
+            if (childClassifications.Length == 0)
+            {
+                continue;
+            }
+
+            string[] platforms = childClassifications
+                .Select(classification => classification.Platform)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            string platform = platforms.Length == 1
+                ? platforms[0]
+                : "Chromium";
+            bool isElectron = platform.Equals(
+                "Electron",
+                StringComparison.OrdinalIgnoreCase);
+            classifications[parent.ProcessId] = new(
+                platform,
+                isElectron ? "Main" : "Browser",
+                isElectron);
+        }
+    }
+
+    private static bool IsSameExecutable(
+        ProcessSnapshotEntry first,
+        ProcessSnapshotEntry second)
+    {
+        if (!string.IsNullOrWhiteSpace(first.ExecutablePath)
+            && !string.IsNullOrWhiteSpace(second.ExecutablePath))
+        {
+            return first.ExecutablePath.Equals(
+            second.ExecutablePath,
+            StringComparison.OrdinalIgnoreCase);
+        }
+
+        return first.ImageName.Equals(
+            second.ImageName,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FormatPlatform(string platformId)

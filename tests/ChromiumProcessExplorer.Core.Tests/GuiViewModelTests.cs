@@ -66,6 +66,72 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
+    public void PresentationTreeIncludesSameExecutableChromiumParent()
+    {
+        ProcessSnapshotEntry parent = CreateProcess(
+            17636,
+            "code.exe",
+            false) with
+        {
+            ExecutablePath = @"C:\Code\code.exe",
+        };
+        ProcessSnapshotEntry renderer = CreateProcess(
+            17637,
+            "code.exe",
+            true) with
+        {
+            ParentProcessId = parent.ProcessId,
+            ExecutablePath = parent.ExecutablePath,
+            ChromiumProcessType = "renderer",
+        };
+        ProcessSnapshotEntry unrelatedParent = CreateProcess(
+            20000,
+            "explorer.exe",
+            false) with
+        {
+            ExecutablePath = @"C:\Windows\explorer.exe",
+        };
+        ProcessSnapshotEntry otherRenderer = CreateProcess(
+            20001,
+            "code.exe",
+            true) with
+        {
+            ParentProcessId = unrelatedParent.ProcessId,
+            ExecutablePath = parent.ExecutablePath,
+            ChromiumProcessType = "renderer",
+        };
+        ProcessGraph graph = new(
+            [parent, renderer, unrelatedParent, otherRenderer],
+            [
+                CreateEdge(
+                    parent,
+                    renderer,
+                    ProcessRelationshipType.OsParent),
+                CreateEdge(
+                    unrelatedParent,
+                    otherRenderer,
+                    ProcessRelationshipType.OsParent),
+            ]);
+
+        ProcessPresentationTree tree = ProcessPresentationTreeBuilder.Build(
+            CreateDiscoveryResult(
+                [parent, renderer, unrelatedParent, otherRenderer],
+                graph));
+        ProcessPresentationBranch parentBranch = Assert.Single(
+            tree.Roots,
+            root => root.Process.Identity.ProcessId == parent.ProcessId);
+
+        Assert.Equal("Browser", parentBranch.Process.Role);
+        Assert.Contains(
+            parentBranch.Children,
+            child => child.Process.Identity.ProcessId == renderer.ProcessId);
+        Assert.DoesNotContain(
+            Flatten(tree.Roots),
+            branch => branch.Process.Identity.ProcessId
+                == unrelatedParent.ProcessId);
+    }
+
+    [Fact]
     public void PresentationTreeNormalizesPlatformAndUtilityBadges()
     {
         ProcessSnapshotEntry browser = CreateProcess(
