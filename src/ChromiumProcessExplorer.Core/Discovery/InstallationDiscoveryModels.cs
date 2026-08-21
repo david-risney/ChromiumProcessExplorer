@@ -122,6 +122,10 @@ public sealed record WindowsInstallationDiscoveryOptions
 
     /// <summary>Gets the maximum total directories inspected by one scan.</summary>
     public int MaximumDirectories { get; init; } = 50_000;
+
+    /// <summary>Gets the maximum number of filesystem roots scanned concurrently.</summary>
+    public int MaximumConcurrency { get; init; } =
+        Math.Max(1, Environment.ProcessorCount);
 }
 
 /// <summary>An installed-program record from a Windows uninstall registry key.</summary>

@@ -120,6 +120,8 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             _options.MaximumDirectories);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+            _options.MaximumConcurrency);
     }
 
     /// <inheritdoc />
@@ -189,15 +191,31 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 : null;
 
         string[] searchRoots = GetSearchRoots();
-        foreach (string searchRoot in searchRoots)
+        List<DiscoveryIssue>[] filesystemIssues = searchRoots
+            .Select(_ => new List<DiscoveryIssue>())
+            .ToArray();
+        object installationSync = new();
+        Parallel.For(
+            0,
+            searchRoots.Length,
+            new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = _options.MaximumConcurrency,
+            },
+            index =>
+            {
+                ScanSearchRoot(
+                    searchRoots[index],
+                    installations,
+                    filesystemIssues[index],
+                    counters,
+                    installationSync,
+                    cancellationToken);
+            });
+        foreach (List<DiscoveryIssue> rootIssues in filesystemIssues)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            ScanSearchRoot(
-                searchRoot,
-                installations,
-                issues,
-                counters,
-                cancellationToken);
+            issues.AddRange(rootIssues);
         }
 
         DiscoverRunningApplications(
@@ -493,6 +511,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         Dictionary<string, InstallationBuilder> installations,
         List<DiscoveryIssue> issues,
         ScanCounters counters,
+        object installationSync,
         CancellationToken cancellationToken)
     {
         if (!Directory.Exists(searchRoot))
@@ -506,13 +525,11 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         while (pending.TryDequeue(out (string Path, int Depth) current))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (counters.DirectoryCount >= _options.MaximumDirectories)
+            if (!counters.TryClaimDirectory(_options.MaximumDirectories))
             {
-                counters.TruncatedDirectoryCount += pending.Count + 1;
+                counters.AddTruncatedDirectories(pending.Count + 1);
                 return;
             }
-
-            counters.DirectoryCount++;
 
             string[] files;
             string[] directories;
@@ -525,13 +542,12 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 exception is IOException
                     or UnauthorizedAccessException)
             {
-                counters.InaccessibleDirectoryCount++;
-                if (counters.ReportedAccessIssueCount < 20)
+                counters.AddInaccessibleDirectory();
+                if (counters.TryClaimReportedAccessIssue(20))
                 {
                     issues.Add(new DiscoveryIssue(
                         "installation-filesystem-scan",
                         $"{current.Path}: {exception.Message}"));
-                    counters.ReportedAccessIssueCount++;
                 }
 
                 continue;
@@ -542,15 +558,18 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 .ToArray();
             if (markerFiles.Length > 0)
             {
-                counters.MarkerFileCount += markerFiles.Length;
+                counters.AddMarkerFiles(markerFiles.Length);
                 try
                 {
-                    AddMarkerInstallation(
-                        current.Path,
-                        markerFiles,
-                        files,
-                        searchRoot,
-                        installations);
+                    lock (installationSync)
+                    {
+                        AddMarkerInstallation(
+                            current.Path,
+                            markerFiles,
+                            files,
+                            searchRoot,
+                            installations);
+                    }
                 }
                 catch (Exception exception) when (
                     exception is IOException
@@ -564,7 +583,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
             if (current.Depth >= _options.MaximumDepth)
             {
-                counters.TruncatedDirectoryCount += directories.Length;
+                counters.AddTruncatedDirectories(directories.Length);
                 continue;
             }
 
@@ -581,7 +600,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                     exception is IOException
                         or UnauthorizedAccessException)
                 {
-                    counters.InaccessibleDirectoryCount++;
+                    counters.AddInaccessibleDirectory();
                 }
             }
         }
@@ -1446,21 +1465,82 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
     private sealed class ScanCounters
     {
-        public int DirectoryCount { get; set; }
+        private int _directoryCount;
+        private int _markerFileCount;
+        private int _inaccessibleDirectoryCount;
+        private int _truncatedDirectoryCount;
+        private int _reportedAccessIssueCount;
 
-        public int MarkerFileCount { get; set; }
+        public int DirectoryCount => Volatile.Read(ref _directoryCount);
+
+        public int MarkerFileCount => Volatile.Read(ref _markerFileCount);
 
         public int RunningProcessCount { get; set; }
 
-        public int InaccessibleDirectoryCount { get; set; }
+        public int InaccessibleDirectoryCount =>
+            Volatile.Read(ref _inaccessibleDirectoryCount);
 
-        public int TruncatedDirectoryCount { get; set; }
-
-        public int ReportedAccessIssueCount { get; set; }
+        public int TruncatedDirectoryCount =>
+            Volatile.Read(ref _truncatedDirectoryCount);
 
         public int RegistryRecordCount { get; set; }
 
         public int PackageCount { get; set; }
+
+        public bool TryClaimDirectory(int maximumDirectories)
+        {
+            while (true)
+            {
+                int current = Volatile.Read(ref _directoryCount);
+                if (current >= maximumDirectories)
+                {
+                    return false;
+                }
+
+                if (Interlocked.CompareExchange(
+                        ref _directoryCount,
+                        current + 1,
+                        current) == current)
+                {
+                    return true;
+                }
+            }
+        }
+
+        public void AddMarkerFiles(int count)
+        {
+            Interlocked.Add(ref _markerFileCount, count);
+        }
+
+        public void AddInaccessibleDirectory()
+        {
+            Interlocked.Increment(ref _inaccessibleDirectoryCount);
+        }
+
+        public void AddTruncatedDirectories(int count)
+        {
+            Interlocked.Add(ref _truncatedDirectoryCount, count);
+        }
+
+        public bool TryClaimReportedAccessIssue(int maximumIssues)
+        {
+            while (true)
+            {
+                int current = Volatile.Read(ref _reportedAccessIssueCount);
+                if (current >= maximumIssues)
+                {
+                    return false;
+                }
+
+                if (Interlocked.CompareExchange(
+                        ref _reportedAccessIssueCount,
+                        current + 1,
+                        current) == current)
+                {
+                    return true;
+                }
+            }
+        }
     }
 
     private sealed record RegistryDiscoveryBatch(

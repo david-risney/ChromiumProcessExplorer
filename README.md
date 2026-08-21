@@ -153,12 +153,21 @@ fingerprint changes. It can be disabled from the Processes toolbar.
 Filtering the process tree keeps matching nodes and their ancestors visible and
 expands those ancestor paths automatically. The same toolbar provides an
 expand-all/collapse-all toggle. Installations have a separate filter for name,
-platform, kind, version, channel, and path. The initial process and installation
-refreshes run together at startup. Both process and install rows provide
-context-menu actions for copying a summary or complete human-readable details.
+platform, kind, version, channel, and path. Both filters accept property terms
+such as `role:renderer`, `version:140`, and `channel:intern`; multiple terms are
+combined. The initial process and installation refreshes run together at
+startup. Filesystem and registry values in process and installation details
+have compact buttons for opening Explorer or Registry Editor. Both process and
+install rows provide context-menu actions for copying a summary or complete
+human-readable details.
 Install versions sort by their numeric components, channels sort Stable, Beta,
 Dev, Canary, Internal, then FixedApp, and app-bundled runtimes are labeled
 `FixedApp`.
+
+Installation discovery scans filesystem roots concurrently, defaulting to the
+logical processor count while preserving the configured global directory
+limit. Registry, Windows package, and browser-managed app discovery also run in
+parallel with the filesystem scan.
 
 Process context menus can launch the configured debugger for the selected PID,
 open Process Explorer at that PID, or configure future-launch debugging.
@@ -184,11 +193,17 @@ install context menus. Process relaunch is limited to live browser-role
 processes and is unavailable for WebView2, hosts, renderers, GPU processes, and
 utility processes; install launch is also unavailable for WebView2.
 
-The argument picker searches a checked-in catalog generated from
+Templates can be marked as favorites; only favorite applicable templates are
+shown in process and install context menus. The editor's argument picker is
+shown while editing the add-parts textbox and searches the complete current
+line first, followed by the switch name before `=`. It searches a checked-in
+catalog generated from
 [peter.sh's Chromium command-line switch reference](https://peter.sh/experiments/chromium-command-line-switches/)
 and the feature flags published on the same page. It also includes complete
 arguments observed on currently running Chromium processes. Double-click an
 entry or use **Add selected argument** to append it to the current template.
+The Run section filters applicable installed executables and running browser
+processes and launches the selected target with the template.
 
 Process-tree badges use a stable category palette:
 

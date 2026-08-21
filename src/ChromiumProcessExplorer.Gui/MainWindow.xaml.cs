@@ -159,7 +159,7 @@ public partial class MainWindow : Window
             PopulateTemplateMenu(
                 contextMenu,
                 process,
-                _viewModel.GetApplicableTemplates(process));
+                _viewModel.GetFavoriteApplicableTemplates(process));
         }
     }
 
@@ -174,7 +174,7 @@ public partial class MainWindow : Window
             PopulateTemplateMenu(
                 contextMenu,
                 installation,
-                _viewModel.GetApplicableTemplates(installation));
+                _viewModel.GetFavoriteApplicableTemplates(installation));
         }
     }
 
@@ -224,6 +224,82 @@ public partial class MainWindow : Window
         MouseButtonEventArgs e)
     {
         _viewModel.AddSelectedCommandLineSuggestion();
+    }
+
+    private void CommandLineAddParts_GotKeyboardFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs e)
+    {
+        UpdateCommandLineSuggestionContext();
+    }
+
+    private void CommandLineAddParts_SelectionChanged(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (CommandLineAddPartsTextBox.IsKeyboardFocusWithin)
+        {
+            UpdateCommandLineSuggestionContext();
+        }
+    }
+
+    private void CommandLineAddParts_LostKeyboardFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs e)
+    {
+        ScheduleCommandLineSuggestionVisibilityUpdate();
+    }
+
+    private void CommandLineSuggestionPanel_LostKeyboardFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs e)
+    {
+        ScheduleCommandLineSuggestionVisibilityUpdate();
+    }
+
+    private void ScheduleCommandLineSuggestionVisibilityUpdate()
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            bool visible = CommandLineAddPartsTextBox.IsKeyboardFocusWithin
+                || CommandLineSuggestionPanel.IsKeyboardFocusWithin;
+            _viewModel.SetCommandLineSuggestionContext(
+                GetCurrentCommandLineAddPart(),
+                visible);
+        });
+    }
+
+    private void RunCommandLineTemplate_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _viewModel.RunSelectedCommandLineTarget();
+    }
+
+    private void UpdateCommandLineSuggestionContext()
+    {
+        _viewModel.SetCommandLineSuggestionContext(
+            GetCurrentCommandLineAddPart(),
+            isVisible: true);
+    }
+
+    private string GetCurrentCommandLineAddPart()
+    {
+        string text = CommandLineAddPartsTextBox.Text;
+        int caret = Math.Clamp(
+            CommandLineAddPartsTextBox.CaretIndex,
+            0,
+            text.Length);
+        int start = caret == 0
+            ? 0
+            : text.LastIndexOf('\n', caret - 1) + 1;
+        int end = text.IndexOf('\n', caret);
+        if (end < 0)
+        {
+            end = text.Length;
+        }
+
+        return text[start..end].Trim('\r').Trim();
     }
 
     private void Installations_Sorting(
@@ -292,6 +368,24 @@ public partial class MainWindow : Window
     {
         await _viewModel.SelectDevToolsAsync(
             ((DataGrid)sender).SelectedItem as DevToolsItemViewModel);
+    }
+
+    private void OpenDetailTarget_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).Tag is not DetailOpenTarget target)
+        {
+            return;
+        }
+
+        TabItem? tab = MainTabControl.SelectedItem as TabItem;
+        _viewModel.OpenDetailTarget(
+            target,
+            string.Equals(
+                tab?.Header as string,
+                "Installs",
+                StringComparison.Ordinal));
     }
 
     private void SetClipboardText(string text)

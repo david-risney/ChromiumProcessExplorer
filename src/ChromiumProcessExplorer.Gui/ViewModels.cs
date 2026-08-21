@@ -119,7 +119,10 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
     }
 }
 
-public sealed record PropertyRow(string Label, string? Value);
+public sealed record PropertyRow(string Label, string? Value)
+{
+    public DetailOpenTarget? OpenTarget => DetailOpenTarget.Detect(Value);
+}
 
 public sealed record RelationshipDetailRow(
     string Direction,
@@ -130,24 +133,40 @@ public sealed record RelationshipDetailRow(
 
 public sealed record SwitchDetailRow(
     string Name,
-    string? Value);
+    string? Value)
+{
+    public DetailOpenTarget? OpenTarget => DetailOpenTarget.Detect(Value);
+}
 
 public sealed record PathDetailRow(
     string Kind,
     string? Value,
     string? Source,
-    string? Confidence);
+    string? Confidence)
+{
+    public DetailOpenTarget? OpenTarget =>
+        DetailOpenTarget.FileSystem(Value);
+}
 
 public sealed record DiagnosticDetailRow(
     string Kind,
     string Status,
     string? Location,
-    string Detail);
+    string Detail)
+{
+    public DetailOpenTarget? OpenTarget =>
+        DetailOpenTarget.Detect(Location);
+}
 
 public sealed record EvidenceDetailRow(
     string Source,
     string Detail,
-    string? Confidence);
+    string? Confidence,
+    string? Location = null)
+{
+    public DetailOpenTarget? OpenTarget =>
+        DetailOpenTarget.Detect(Location);
+}
 
 public sealed record ContextIssueViewModel(
     string Source,
@@ -262,7 +281,8 @@ public sealed class InstallationItemViewModel : ObservableObject
         Installation.Evidence.Select(item => new EvidenceDetailRow(
             item.Source,
             item.Detail,
-            null)).ToArray();
+            null,
+            item.Path)).ToArray();
 }
 
 public sealed class DevToolsItemViewModel
@@ -365,6 +385,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _commandLineSuggestionStatus = string.Empty;
     private CommandLineSuggestionViewModel? _selectedCommandLineSuggestion;
     private CommandLineSuggestionViewModel[] _commandLineSuggestions = [];
+    private bool _isCommandLineSuggestionVisible;
+    private string _commandLineRunFilter = string.Empty;
+    private CommandLineRunTargetViewModel? _selectedCommandLineRunTarget;
 
     public MainViewModel(
         IGuiDiscoveryService discovery,
@@ -393,7 +416,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             initialSettings.CommandLineTemplates)
         {
             CommandLineTemplates.Add(
-                new CommandLineTemplateViewModel(template, SaveSettings));
+                new CommandLineTemplateViewModel(
+                    template,
+                    OnCommandLineTemplateChanged));
         }
 
         SelectedCommandLineTemplate = CommandLineTemplates.FirstOrDefault();
@@ -431,6 +456,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<CommandLineSuggestionViewModel>
         FilteredCommandLineSuggestions
+    { get; } = [];
+
+    public ObservableCollection<CommandLineRunTargetViewModel>
+        FilteredCommandLineRunTargets
     { get; } = [];
 
     public ProcessTreeItemViewModel? SelectedProcess
@@ -477,7 +506,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public CommandLineTemplateViewModel? SelectedCommandLineTemplate
     {
         get => _selectedCommandLineTemplate;
-        set => SetField(ref _selectedCommandLineTemplate, value);
+        set
+        {
+            if (SetField(ref _selectedCommandLineTemplate, value))
+            {
+                UpdateCommandLineRunTargets();
+            }
+        }
     }
 
     public CommandLineSuggestionViewModel? SelectedCommandLineSuggestion
@@ -502,6 +537,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         get => _commandLineSuggestionStatus;
         private set => SetField(ref _commandLineSuggestionStatus, value);
+    }
+
+    public bool IsCommandLineSuggestionVisible
+    {
+        get => _isCommandLineSuggestionVisible;
+        set => SetField(ref _isCommandLineSuggestionVisible, value);
+    }
+
+    public string CommandLineRunFilter
+    {
+        get => _commandLineRunFilter;
+        set
+        {
+            if (SetField(ref _commandLineRunFilter, value))
+            {
+                UpdateCommandLineRunTargets();
+            }
+        }
+    }
+
+    public CommandLineRunTargetViewModel? SelectedCommandLineRunTarget
+    {
+        get => _selectedCommandLineRunTarget;
+        set => SetField(ref _selectedCommandLineRunTarget, value);
     }
 
     public string ProcessFilter
@@ -683,6 +742,73 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             existing.Append(argument));
     }
 
+    public void SetCommandLineSuggestionContext(
+        string currentLine,
+        bool isVisible)
+    {
+        IsCommandLineSuggestionVisible = isVisible;
+        if (isVisible)
+        {
+            CommandLineSuggestionFilter = currentLine.Trim();
+        }
+    }
+
+    public void RunSelectedCommandLineTarget()
+    {
+        if (SelectedCommandLineTemplate is null
+            || SelectedCommandLineRunTarget is null)
+        {
+            return;
+        }
+
+        if (SelectedCommandLineRunTarget.Process is not null)
+        {
+            LaunchWithTemplate(
+                SelectedCommandLineRunTarget.Process,
+                SelectedCommandLineTemplate);
+        }
+        else if (SelectedCommandLineRunTarget.Installation is not null)
+        {
+            LaunchWithTemplate(
+                SelectedCommandLineRunTarget.Installation,
+                SelectedCommandLineTemplate);
+        }
+    }
+
+    public void OpenDetailTarget(
+        DetailOpenTarget target,
+        bool installationContext)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        try
+        {
+            if (target.Kind == DetailOpenTargetKind.Registry)
+            {
+                _externalTools.OpenRegistryPath(target.Value);
+            }
+            else
+            {
+                _externalTools.OpenFileSystemPath(target.Value);
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or ArgumentException
+            or System.Security.SecurityException)
+        {
+            if (installationContext)
+            {
+                AddInstallationActionIssue(exception.Message);
+            }
+            else
+            {
+                AddProcessActionIssue(exception.Message);
+            }
+        }
+    }
+
     public async Task RefreshProcessesAsync()
     {
         if (IsRefreshingProcesses)
@@ -733,6 +859,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     Installations,
                     cancellationToken);
                 ApplyInstallationFilter(InstallationFilter);
+                UpdateCommandLineRunTargets();
                 Replace(
                     InstallationNotices,
                     result.Issues
@@ -1184,8 +1311,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public void AddCommandLineTemplate()
     {
         CommandLineTemplateViewModel template = new(
-            new CommandLineTemplateSettings(),
-            SaveSettings);
+            new CommandLineTemplateSettings
+            {
+                IsFavorite = false,
+            },
+            OnCommandLineTemplateChanged);
         CommandLineTemplates.Add(template);
         SelectedCommandLineTemplate = template;
         SaveSettings();
@@ -1233,6 +1363,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     public IReadOnlyList<CommandLineTemplateViewModel>
+        GetFavoriteApplicableTemplates(ProcessTreeItemViewModel process)
+    {
+        return GetApplicableTemplates(process)
+            .Where(template => template.IsFavorite)
+            .ToArray();
+    }
+
+    public IReadOnlyList<CommandLineTemplateViewModel>
         GetApplicableTemplates(InstallationItemViewModel installation)
     {
         ArgumentNullException.ThrowIfNull(installation);
@@ -1247,6 +1385,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         return GetApplicableTemplates(
             Path.GetFileName(installation.ExecutablePath));
+    }
+
+    public IReadOnlyList<CommandLineTemplateViewModel>
+        GetFavoriteApplicableTemplates(InstallationItemViewModel installation)
+    {
+        return GetApplicableTemplates(installation)
+            .Where(template => template.IsFavorite)
+            .ToArray();
     }
 
     public void LaunchWithTemplate(
@@ -1289,6 +1435,67 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             template,
             AddInstallationActionIssue,
             message => InstallationStatus = message);
+    }
+
+    private void UpdateCommandLineRunTargets()
+    {
+        CommandLineTemplateViewModel? template =
+            SelectedCommandLineTemplate;
+        if (template is null)
+        {
+            Replace(FilteredCommandLineRunTargets, []);
+            SelectedCommandLineRunTarget = null;
+            return;
+        }
+
+        IEnumerable<CommandLineRunTargetViewModel> processTargets =
+            Flatten(ProcessRoots)
+                .Where(process => !process.IsReference)
+                .GroupBy(process => process.Identity)
+                .Select(group => group.First())
+                .Where(process =>
+                    GetApplicableTemplates(process).Contains(template))
+                .Select(process => new CommandLineRunTargetViewModel(
+                    $"{process.ImageName} ({process.ProcessId})",
+                    "Running process",
+                    process.ExecutablePath!,
+                    process.CommandLine,
+                    process,
+                    null));
+        IEnumerable<CommandLineRunTargetViewModel> installationTargets =
+            Installations
+                .Where(installation =>
+                    GetApplicableTemplates(installation).Contains(template))
+                .Select(installation => new CommandLineRunTargetViewModel(
+                    installation.Name,
+                    "Install",
+                    installation.ExecutablePath!,
+                    null,
+                    null,
+                    installation));
+        CommandLineRunTargetViewModel[] targets = processTargets
+            .Concat(installationTargets)
+            .Where(target => PropertyFilter.Matches(
+                CommandLineRunFilter,
+                ("name", target.Name),
+                ("source", target.Source),
+                ("executable", target.ExecutablePath),
+                ("path", target.ExecutablePath),
+                ("command", target.CommandLine)))
+            .OrderBy(target => target.Source, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(target => target.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        string? selectedKey =
+            SelectedCommandLineRunTarget?.SelectionKey;
+        Replace(FilteredCommandLineRunTargets, targets);
+        SelectedCommandLineRunTarget = selectedKey is null
+            ? FilteredCommandLineRunTargets.FirstOrDefault()
+            : FilteredCommandLineRunTargets.FirstOrDefault(target =>
+                string.Equals(
+                    target.SelectionKey,
+                    selectedKey,
+                    StringComparison.OrdinalIgnoreCase))
+                ?? FilteredCommandLineRunTargets.FirstOrDefault();
     }
 
     private void RebuildCommandLineSuggestions(
@@ -1439,20 +1646,87 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IReadOnlyList<CommandLineSuggestionViewModel> suggestions,
             string filterValue)
     {
-        string filter = filterValue.Trim();
-        return suggestions.Where(suggestion =>
-                filter.Length == 0
-                || suggestion.Argument.Contains(
-                    filter,
-                    StringComparison.OrdinalIgnoreCase)
-                || suggestion.Description.Contains(
-                    filter,
-                    StringComparison.OrdinalIgnoreCase)
-                || suggestion.Kind.Contains(
-                    filter,
-                    StringComparison.OrdinalIgnoreCase))
-            .Take(500)
+        string line = filterValue.Trim();
+        string switchName = line.Split('=', 2)[0].Trim();
+        string[] queries = new[] { line, switchName }
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        List<CommandLineSuggestionViewModel> matches = [];
+        foreach (string query in queries)
+        {
+            int queryLimit = queries.Length == 1 ? 500 : 250;
+            foreach (CommandLineSuggestionViewModel suggestion in suggestions
+                .Select(suggestion => (
+                    Suggestion: suggestion,
+                    Rank: GetMatchRank(suggestion, query)))
+                .Where(match => match.Rank is not null)
+                .OrderBy(match => match.Rank)
+                .ThenBy(
+                    match => match.Suggestion.Argument,
+                    StringComparer.OrdinalIgnoreCase)
+                .Take(queryLimit)
+                .Select(match => match.Suggestion))
+            {
+                if (matches.Count >= 500)
+                {
+                    return matches.ToArray();
+                }
+
+                if (!seen.Add(suggestion.Argument))
+                {
+                    continue;
+                }
+
+                matches.Add(suggestion);
+            }
+        }
+
+        return matches.ToArray();
+
+        static int? GetMatchRank(
+            CommandLineSuggestionViewModel suggestion,
+            string query)
+        {
+            if (query.Length == 0)
+            {
+                return 0;
+            }
+
+            if (suggestion.Argument.Equals(
+                query,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return 0;
+            }
+
+            if (suggestion.Argument.StartsWith(
+                query,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return 1;
+            }
+
+            if (suggestion.Argument.Contains(
+                    query,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return 2;
+            }
+
+            if (suggestion.Description.Contains(
+                    query,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return 3;
+            }
+
+            return suggestion.Kind.Contains(
+                    query,
+                    StringComparison.OrdinalIgnoreCase)
+                ? 4
+                : null;
+        }
     }
 
     private void ApplyCommandLineSuggestionMatches(
@@ -1475,6 +1749,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private void OnCommandLineTemplateChanged()
+    {
+        SaveSettings();
+        UpdateCommandLineRunTargets();
     }
 
     private void SaveSettings()
@@ -1628,6 +1908,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _diagnosticsTask = null;
         await PopulateIconsAsync(ProcessRoots, cancellationToken);
         UpdateFilteredProcessRoots();
+        UpdateCommandLineRunTargets();
 
         IReadOnlyList<DiscoveryIssue> issues =
             ProcessPresentationTreeBuilder.CollectIssues(result);
@@ -1764,19 +2045,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 .Where(child => child is not null)
                 .Select(child => child!)
                 .ToArray();
-            bool matches = filter.Length == 0
-                || item.ImageName.Contains(
-                    filter,
-                    StringComparison.OrdinalIgnoreCase)
-                || item.Platform.Contains(
-                    filter,
-                    StringComparison.OrdinalIgnoreCase)
-                || item.Role.Contains(
-                    filter,
-                    StringComparison.OrdinalIgnoreCase)
-                || item.ProcessId.ToString(
-                    System.Globalization.CultureInfo.InvariantCulture)
-                    .Contains(filter, StringComparison.OrdinalIgnoreCase);
+            string processId = item.ProcessId.ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+            bool matches = PropertyFilter.Matches(
+                filter,
+                ("name", item.ImageName),
+                ("image", item.ImageName),
+                ("pid", processId),
+                ("platform", item.Platform),
+                ("role", item.Role),
+                ("type", item.Role),
+                ("path", item.ExecutablePath),
+                ("executable", item.ExecutablePath),
+                ("command", item.CommandLine),
+                ("status", item.StateLabel));
             if (!matches && children.Length == 0)
             {
                 return null;
@@ -1861,27 +2143,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IReadOnlyList<InstallationItemViewModel> installations,
         string filterValue)
     {
-        string filter = filterValue.Trim();
-        return installations.Where(item =>
-            filter.Length == 0
-            || item.Name.Contains(
-                filter,
-                StringComparison.OrdinalIgnoreCase)
-            || item.Platform.Contains(
-                filter,
-                StringComparison.OrdinalIgnoreCase)
-            || item.Kind.Contains(
-                filter,
-                StringComparison.OrdinalIgnoreCase)
-            || item.InstallPath.Contains(
-                filter,
-                StringComparison.OrdinalIgnoreCase)
-            || (item.Version?.Contains(
-                filter,
-                StringComparison.OrdinalIgnoreCase) ?? false)
-            || (item.Channel?.Contains(
-                filter,
-                StringComparison.OrdinalIgnoreCase) ?? false)).ToArray();
+        return installations.Where(item => PropertyFilter.Matches(
+            filterValue,
+            ("name", item.Name),
+            ("platform", item.Platform),
+            ("kind", item.Kind),
+            ("type", item.Kind),
+            ("version", item.Version),
+            ("channel", item.Channel),
+            ("path", item.InstallPath),
+            ("path", item.ExecutablePath),
+            ("executable", item.ExecutablePath),
+            ("architecture", item.Installation.Metadata.Architecture),
+            ("publisher", item.Installation.Metadata.Publisher),
+            ("source", item.Installation.Metadata.InstallSource),
+            ("scope", item.RuntimeScope))).ToArray();
     }
 
     private async Task PopulateInstallationIconsAsync(

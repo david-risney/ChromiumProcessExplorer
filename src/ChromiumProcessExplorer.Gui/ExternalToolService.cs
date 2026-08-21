@@ -20,6 +20,10 @@ public interface IExternalToolService
     void LaunchExecutable(
         string executablePath,
         IReadOnlyList<string> arguments);
+
+    void OpenFileSystemPath(string path);
+
+    void OpenRegistryPath(string path);
 }
 
 public sealed class WindowsExternalToolService : IExternalToolService
@@ -76,6 +80,46 @@ public sealed class WindowsExternalToolService : IExternalToolService
         Start(startInfo);
     }
 
+    public void OpenFileSystemPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        string fullPath = Path.GetFullPath(path.Trim().Trim('"'));
+        string folder = Directory.Exists(fullPath)
+            ? fullPath
+            : Path.GetDirectoryName(fullPath)
+                ?? throw new DirectoryNotFoundException(
+                    $"The containing folder for {fullPath} is unavailable.");
+        if (!Directory.Exists(folder))
+        {
+            throw new DirectoryNotFoundException(
+                $"The folder does not exist: {folder}");
+        }
+
+        ProcessStartInfo startInfo = new("explorer.exe")
+        {
+            UseShellExecute = true,
+        };
+        startInfo.ArgumentList.Add(folder);
+        Start(startInfo);
+    }
+
+    public void OpenRegistryPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        string normalized = NormalizeRegistryPath(path);
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(
+            @"Software\Microsoft\Windows\CurrentVersion\Applets\Regedit",
+            writable: true);
+        key.SetValue(
+            "LastKey",
+            $"Computer\\{normalized}",
+            RegistryValueKind.String);
+        Start(new ProcessStartInfo("regedit.exe")
+        {
+            UseShellExecute = true,
+        });
+    }
+
     private static void LaunchTemplate(
         string commandTemplate,
         params (string Placeholder, string Value)[] values)
@@ -118,6 +162,39 @@ public sealed class WindowsExternalToolService : IExternalToolService
         return separator < 0
             ? (command, string.Empty)
             : (command[..separator], command[(separator + 1)..].TrimStart());
+    }
+
+    private static string NormalizeRegistryPath(string path)
+    {
+        string normalized = path.Trim().Trim('"');
+        if (normalized.StartsWith(
+            "Computer\\",
+            StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized["Computer\\".Length..];
+        }
+
+        (string Prefix, string Expanded)[] aliases =
+        [
+            ("HKLM\\", "HKEY_LOCAL_MACHINE\\"),
+            ("HKCU\\", "HKEY_CURRENT_USER\\"),
+            ("HKCR\\", "HKEY_CLASSES_ROOT\\"),
+            ("HKU\\", "HKEY_USERS\\"),
+            ("HKCC\\", "HKEY_CURRENT_CONFIG\\"),
+            ("\\Registry\\Machine\\", "HKEY_LOCAL_MACHINE\\"),
+            ("\\Registry\\User\\", "HKEY_USERS\\"),
+        ];
+        foreach ((string prefix, string expanded) in aliases)
+        {
+            if (normalized.StartsWith(
+                prefix,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return expanded + normalized[prefix.Length..];
+            }
+        }
+
+        return normalized;
     }
 
     private static void Start(ProcessStartInfo startInfo)

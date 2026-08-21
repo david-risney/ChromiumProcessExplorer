@@ -17,11 +17,33 @@
             <Setter Property="Background" Value="White" />
             <Setter Property="BorderBrush" Value="#FFD8DDE6" />
         </Style>
+        <DataTemplate x:Key="OpenTargetCellTemplate">
+            <Button Width="28"
+                    Height="24"
+                    Padding="0"
+                    Click="OpenDetailTarget_Click"
+                    Content="{Binding OpenTarget.Emoji}"
+                    Tag="{Binding OpenTarget}"
+                    ToolTip="{Binding OpenTarget.ToolTip}">
+                <Button.Style>
+                    <Style TargetType="Button">
+                        <Setter Property="Visibility" Value="Visible" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding OpenTarget}"
+                                         Value="{x:Null}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+        </DataTemplate>
         <DataTemplate x:Key="PropertyRowTemplate" DataType="{x:Type local:PropertyRow}">
             <Grid Margin="0,3">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="170" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock FontWeight="SemiBold" Text="{Binding Label}" />
                 <TextBox Grid.Column="1"
@@ -31,6 +53,10 @@
                          IsReadOnly="True"
                          Text="{Binding Value, Mode=OneWay}"
                          TextWrapping="Wrap" />
+                <ContentControl Grid.Column="2"
+                                Margin="6,0,0,0"
+                                Content="{Binding}"
+                                ContentTemplate="{StaticResource OpenTargetCellTemplate}" />
             </Grid>
         </DataTemplate>
         <Style TargetType="DataGrid">
@@ -82,7 +108,8 @@
     </Window.Resources>
 
     <DockPanel>
-        <TabControl Margin="8">
+        <TabControl x:Name="MainTabControl"
+                    Margin="8">
             <TabItem Header="Processes">
                 <Grid Margin="4">
                     <Grid.RowDefinitions>
@@ -211,7 +238,7 @@
                                                  BorderThickness="0"
                                                  Background="Transparent"
                                                  Text="{Binding ProcessFilter, UpdateSourceTrigger=PropertyChanged}"
-                                                 ToolTip="Filter by process name, PID, platform, or role" />
+                                                 ToolTip="Filter text or use name:, pid:, platform:, role:, path:, command:, or status:" />
                                     </Grid>
                                 </Grid>
                             </Border>
@@ -410,6 +437,8 @@
                                             <DataGrid.Columns>
                                                 <DataGridTextColumn Header="Switch" Binding="{Binding Name}" Width="*" />
                                                 <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="3*" />
+                                                <DataGridTemplateColumn Width="34"
+                                                                        CellTemplate="{StaticResource OpenTargetCellTemplate}" />
                                             </DataGrid.Columns>
                                         </DataGrid>
                                     </StackPanel>
@@ -421,6 +450,8 @@
                                             <DataGridTextColumn Header="Location" Binding="{Binding Value}" Width="3*" />
                                             <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="*" />
                                             <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence}" />
+                                            <DataGridTemplateColumn Width="34"
+                                                                    CellTemplate="{StaticResource OpenTargetCellTemplate}" />
                                         </DataGrid.Columns>
                                     </DataGrid>
                                 </GroupBox>
@@ -431,6 +462,8 @@
                                             <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*" />
                                             <DataGridTextColumn Header="Location" Binding="{Binding Location}" Width="2*" />
                                             <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="3*" />
+                                            <DataGridTemplateColumn Width="34"
+                                                                    CellTemplate="{StaticResource OpenTargetCellTemplate}" />
                                         </DataGrid.Columns>
                                     </DataGrid>
                                 </GroupBox>
@@ -455,6 +488,9 @@
                                                     <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="*" />
                                                     <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="3*" />
                                                     <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence}" />
+                                                    <DataGridTextColumn Header="Location" Binding="{Binding Location}" Width="2*" />
+                                                    <DataGridTemplateColumn Width="34"
+                                                                            CellTemplate="{StaticResource OpenTargetCellTemplate}" />
                                                 </DataGrid.Columns>
                                             </DataGrid>
                                         </GroupBox>
@@ -495,9 +531,9 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="760" MinWidth="420" />
+                        <ColumnDefinition Width="3*" MinWidth="280" />
                         <ColumnDefinition Width="5" />
-                        <ColumnDefinition Width="*" MinWidth="320" />
+                        <ColumnDefinition Width="2*" MinWidth="280" />
                     </Grid.ColumnDefinitions>
                     <Border Grid.ColumnSpan="3"
                             Margin="0,0,0,8"
@@ -605,7 +641,7 @@
                                              BorderThickness="0"
                                              Background="Transparent"
                                              Text="{Binding InstallationFilter, UpdateSourceTrigger=PropertyChanged}"
-                                             ToolTip="Filter by name, platform, kind, version, channel, or path" />
+                                             ToolTip="Filter text or use name:, platform:, kind:, version:, channel:, path:, architecture:, publisher:, source:, or scope:" />
                                 </Grid>
                             </Grid>
                         </Border>
@@ -660,6 +696,9 @@
                     <GridSplitter Grid.Row="1"
                                   Grid.Column="1"
                                   Width="5"
+                                  HorizontalAlignment="Stretch"
+                                  ResizeBehavior="PreviousAndNext"
+                                  ResizeDirection="Columns"
                                   Background="#FFE1E5EB" />
                     <Grid Grid.Row="1"
                           Grid.Column="2"
@@ -702,6 +741,9 @@
                                         <DataGrid.Columns>
                                             <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="*" />
                                             <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="3*" />
+                                            <DataGridTextColumn Header="Location" Binding="{Binding Location}" Width="2*" />
+                                            <DataGridTemplateColumn Width="34"
+                                                                    CellTemplate="{StaticResource OpenTargetCellTemplate}" />
                                         </DataGrid.Columns>
                                     </DataGrid>
                                 </GroupBox>
@@ -833,6 +875,9 @@
                                         <TextBox Margin="0,5,0,12"
                                                  Padding="6"
                                                  Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                                        <CheckBox Margin="0,0,0,12"
+                                                  Content="Favorite (show in process and install context menus)"
+                                                  IsChecked="{Binding IsFavorite}" />
                                         <TextBlock FontWeight="SemiBold"
                                                    Text="Applicable executable regex" />
                                         <TextBlock Margin="0,2,0,5"
@@ -849,51 +894,67 @@
                                         <TextBlock Foreground="#FF5B6472"
                                                    Text="Enter one complete argument per line, such as --remote-debugging-port=9222."
                                                    TextWrapping="Wrap" />
-                                        <TextBox MinHeight="130"
+                                        <TextBox x:Name="CommandLineAddPartsTextBox"
+                                                 MinHeight="130"
                                                  Margin="0,8,0,0"
                                                  Padding="6"
                                                  AcceptsReturn="True"
                                                  FontFamily="Consolas"
+                                                 GotKeyboardFocus="CommandLineAddParts_GotKeyboardFocus"
+                                                 LostKeyboardFocus="CommandLineAddParts_LostKeyboardFocus"
+                                                 SelectionChanged="CommandLineAddParts_SelectionChanged"
                                                  Text="{Binding AddPartsText, UpdateSourceTrigger=PropertyChanged}"
                                                  VerticalScrollBarVisibility="Auto" />
-                                        <Separator Margin="0,12,0,10" />
-                                        <TextBlock FontWeight="SemiBold"
-                                                   Text="Find Chromium arguments" />
-                                        <TextBlock Margin="0,2,0,5"
-                                                   Foreground="#FF5B6472"
-                                                   Text="Search the generated Chromium catalog and arguments observed on currently running processes."
-                                                   TextWrapping="Wrap" />
-                                        <TextBox Padding="6"
-                                                 Text="{Binding DataContext.CommandLineSuggestionFilter, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=PropertyChanged}"
-                                                 ToolTip="Search switch names, feature names, and descriptions" />
-                                        <DataGrid Height="230"
-                                                  Margin="0,8,0,0"
-                                                  ItemsSource="{Binding DataContext.FilteredCommandLineSuggestions, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                  MouseDoubleClick="CommandLineSuggestion_MouseDoubleClick"
-                                                  SelectedItem="{Binding DataContext.SelectedCommandLineSuggestion, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                                            <DataGrid.Columns>
-                                                <DataGridTextColumn Header="Argument"
-                                                                    Binding="{Binding Argument}"
-                                                                    Width="2*" />
-                                                <DataGridTextColumn Header="Type"
-                                                                    Binding="{Binding Kind}" />
-                                                <DataGridTextColumn Header="Origin"
-                                                                    Binding="{Binding Origin}" />
-                                                <DataGridTextColumn Header="Description"
-                                                                    Binding="{Binding Description}"
-                                                                    Width="3*" />
-                                            </DataGrid.Columns>
-                                        </DataGrid>
-                                        <DockPanel Margin="0,8,0,0">
-                                            <Button DockPanel.Dock="Right"
-                                                    Padding="12,4"
-                                                    Click="AddCommandLineSuggestion_Click"
-                                                    Content="Add selected argument" />
-                                            <TextBlock VerticalAlignment="Center"
+                                        <StackPanel x:Name="CommandLineSuggestionPanel"
+                                                    Margin="0,12,0,0"
+                                                    LostKeyboardFocus="CommandLineSuggestionPanel_LostKeyboardFocus">
+                                            <StackPanel.Style>
+                                                <Style TargetType="StackPanel">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding DataContext.IsCommandLineSuggestionVisible, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                     Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Style>
+                                            <Separator Margin="0,0,0,10" />
+                                            <TextBlock FontWeight="SemiBold"
+                                                       Text="Find Chromium arguments" />
+                                            <TextBlock Margin="0,2,0,5"
                                                        Foreground="#FF5B6472"
-                                                       Text="{Binding DataContext.CommandLineSuggestionStatus, RelativeSource={RelativeSource AncestorType=Window}}" />
-                                        </DockPanel>
+                                                       Text="{Binding DataContext.CommandLineSuggestionFilter, RelativeSource={RelativeSource AncestorType=Window}, StringFormat=Searching the current line and switch name: {0}}"
+                                                       TextWrapping="Wrap" />
+                                            <DataGrid Height="230"
+                                                      Margin="0,8,0,0"
+                                                      ItemsSource="{Binding DataContext.FilteredCommandLineSuggestions, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                      MouseDoubleClick="CommandLineSuggestion_MouseDoubleClick"
+                                                      SelectedItem="{Binding DataContext.SelectedCommandLineSuggestion, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Argument"
+                                                                        Binding="{Binding Argument}"
+                                                                        Width="2*" />
+                                                    <DataGridTextColumn Header="Type"
+                                                                        Binding="{Binding Kind}" />
+                                                    <DataGridTextColumn Header="Origin"
+                                                                        Binding="{Binding Origin}" />
+                                                    <DataGridTextColumn Header="Description"
+                                                                        Binding="{Binding Description}"
+                                                                        Width="3*" />
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                            <DockPanel Margin="0,8,0,0">
+                                                <Button DockPanel.Dock="Right"
+                                                        Padding="12,4"
+                                                        Click="AddCommandLineSuggestion_Click"
+                                                        Content="Add selected argument" />
+                                                <TextBlock VerticalAlignment="Center"
+                                                           Foreground="#FF5B6472"
+                                                           Text="{Binding DataContext.CommandLineSuggestionStatus, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                            </DockPanel>
+                                        </StackPanel>
                                     </StackPanel>
                                 </GroupBox>
                                 <GroupBox Header="Command line parts to remove"
@@ -909,6 +970,42 @@
                                                  FontFamily="Consolas"
                                                  Text="{Binding RemovePartsText, UpdateSourceTrigger=PropertyChanged}"
                                                  VerticalScrollBarVisibility="Auto" />
+                                    </StackPanel>
+                                </GroupBox>
+                                <GroupBox Header="Run"
+                                          Style="{StaticResource SectionCard}">
+                                    <StackPanel>
+                                        <TextBlock Foreground="#FF5B6472"
+                                                   Text="Choose an applicable installed executable or running browser process and launch it with this template."
+                                                   TextWrapping="Wrap" />
+                                        <TextBox Margin="0,8,0,0"
+                                                 Padding="6"
+                                                 Text="{Binding DataContext.CommandLineRunFilter, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="Filter by target name, source, executable path, or running command line" />
+                                        <DataGrid Height="220"
+                                                  Margin="0,8,0,0"
+                                                  ItemsSource="{Binding DataContext.FilteredCommandLineRunTargets, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  SelectedItem="{Binding DataContext.SelectedCommandLineRunTarget, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Target"
+                                                                    Binding="{Binding Name}"
+                                                                    Width="2*" />
+                                                <DataGridTextColumn Header="Source"
+                                                                    Binding="{Binding Source}" />
+                                                <DataGridTextColumn Header="Executable"
+                                                                    Binding="{Binding ExecutablePath}"
+                                                                    Width="3*" />
+                                                <DataGridTextColumn Header="Command line"
+                                                                    Binding="{Binding CommandLine}"
+                                                                    Width="4*" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                        <Button Margin="0,8,0,0"
+                                                HorizontalAlignment="Right"
+                                                Padding="16,5"
+                                                Click="RunCommandLineTemplate_Click"
+                                                Content="Run selected" />
                                     </StackPanel>
                                 </GroupBox>
                                 <Border Padding="8"

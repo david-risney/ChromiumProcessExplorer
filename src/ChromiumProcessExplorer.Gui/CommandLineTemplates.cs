@@ -7,6 +7,19 @@ public sealed record CommandLineRemovalSettings(
     string Pattern,
     bool IsRegex);
 
+public sealed record CommandLineRunTargetViewModel(
+    string Name,
+    string Source,
+    string ExecutablePath,
+    string? CommandLine,
+    ProcessTreeItemViewModel? Process,
+    InstallationItemViewModel? Installation)
+{
+    public string SelectionKey => Process is null
+        ? $"install|{Installation?.InstallPath}"
+        : $"process|{Process.Identity}";
+}
+
 public sealed record CommandLineTemplateSettings
 {
     public string Id { get; init; } = Guid.NewGuid().ToString("N");
@@ -14,6 +27,8 @@ public sealed record CommandLineTemplateSettings
     public string Name { get; init; } = "New template";
 
     public string ApplicableExecutableRegex { get; init; } = ".*";
+
+    public bool IsFavorite { get; init; } = true;
 
     public IReadOnlyList<string> AddParts { get; init; } = [];
 
@@ -27,6 +42,7 @@ public sealed record CommandLineTemplateSettings
             Id = "remote-debugging",
             Name = "Enable remote debugging",
             ApplicableExecutableRegex = ".*",
+            IsFavorite = true,
             AddParts = ["--remote-debugging-port=9222"],
         };
     }
@@ -42,6 +58,7 @@ public sealed class CommandLineTemplateViewModel : ObservableObject
     private string _applicableExecutableRegex;
     private string _addPartsText;
     private string _removePartsText;
+    private bool _isFavorite;
 
     public CommandLineTemplateViewModel(
         CommandLineTemplateSettings settings,
@@ -52,6 +69,7 @@ public sealed class CommandLineTemplateViewModel : ObservableObject
         Id = settings.Id;
         _name = settings.Name;
         _applicableExecutableRegex = settings.ApplicableExecutableRegex;
+        _isFavorite = settings.IsFavorite;
         _addPartsText = string.Join(Environment.NewLine, settings.AddParts);
         _removePartsText = string.Join(
             Environment.NewLine,
@@ -72,6 +90,18 @@ public sealed class CommandLineTemplateViewModel : ObservableObject
     {
         get => _applicableExecutableRegex;
         set => SetTemplateField(ref _applicableExecutableRegex, value);
+    }
+
+    public bool IsFavorite
+    {
+        get => _isFavorite;
+        set
+        {
+            if (SetField(ref _isFavorite, value))
+            {
+                _changed();
+            }
+        }
     }
 
     public string AddPartsText
@@ -144,6 +174,7 @@ public sealed class CommandLineTemplateViewModel : ObservableObject
             Name = Name.Trim(),
             ApplicableExecutableRegex =
                 ApplicableExecutableRegex.Trim(),
+            IsFavorite = IsFavorite,
             AddParts = GetLines(AddPartsText),
             RemoveParts = GetRemoveParts(),
         };

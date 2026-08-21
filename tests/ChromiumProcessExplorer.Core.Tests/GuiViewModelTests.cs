@@ -229,7 +229,7 @@ public sealed class GuiViewModelTests
         };
         MainViewModel viewModel = new(discovery, new StubIconProvider());
         await viewModel.RefreshProcessesAsync();
-        viewModel.ProcessFilter = "renderer";
+        viewModel.ProcessFilter = "role:renderer";
         Assert.Empty(viewModel.FilteredProcessRoots);
         viewModel.ProcessFilter = "sample";
         Assert.Single(viewModel.FilteredProcessRoots);
@@ -496,7 +496,7 @@ public sealed class GuiViewModelTests
             new StubIconProvider());
         await viewModel.RefreshProcessesAsync();
 
-        viewModel.ProcessFilter = "renderer";
+        viewModel.ProcessFilter = "role:renderer";
 
         ProcessTreeItemViewModel root =
             Assert.Single(viewModel.FilteredProcessRoots);
@@ -547,11 +547,115 @@ public sealed class GuiViewModelTests
         await viewModel.RefreshInstallationsAsync();
 
         viewModel.InstallationFilter = "razer";
-        await Task.Delay(300);
+        await WaitForAsync(() =>
+            viewModel.FilteredInstallations.Count == 1);
 
         InstallationItemViewModel installation =
             Assert.Single(viewModel.FilteredInstallations);
         Assert.Equal("Razer Central", installation.Name);
+    }
+
+    [Fact]
+    public async Task InstallationFilterSupportsPropertyPrefixes()
+    {
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverInstallations = _ => ValueTask.FromResult(
+                new InstallationDiscoveryResult(
+                    SnapshotTime,
+                    [
+                        CreateInstallation(
+                            "Microsoft Edge",
+                            "Edge",
+                            @"C:\Program Files\Edge",
+                            version: "140.0.1",
+                            channel: "Internal"),
+                        CreateInstallation(
+                            "Google Chrome",
+                            "Chrome",
+                            @"C:\Program Files\Chrome",
+                            version: "139.0.1",
+                            channel: "Stable"),
+                    ],
+                    new InstallationDiscoveryStatistics(
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        TimeSpan.Zero),
+                    [])),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+        await viewModel.RefreshInstallationsAsync();
+
+        viewModel.InstallationFilter = "version:140 channel:intern";
+        await WaitForAsync(() =>
+            viewModel.FilteredInstallations.Count == 1);
+
+        Assert.Equal(
+            "Microsoft Edge",
+            Assert.Single(viewModel.FilteredInstallations).Name);
+    }
+
+    [Fact]
+    public void PropertyFilterSupportsQuotedAndUnqualifiedTerms()
+    {
+        Assert.True(PropertyFilter.Matches(
+            "name:\"Google Chrome\" version:140 stable",
+            ("name", "Google Chrome"),
+            ("version", "140.0.1"),
+            ("channel", "Stable")));
+        Assert.False(PropertyFilter.Matches(
+            "channel:beta",
+            ("name", "Google Chrome"),
+            ("channel", "Stable")));
+    }
+
+    [Fact]
+    public void DetailOpenTargetsDetectPathsAndRegistryKeys()
+    {
+        Assert.Equal(
+            DetailOpenTargetKind.FileSystem,
+            DetailOpenTarget.Detect(@"C:\Apps\Sample\app.exe")?.Kind);
+        Assert.Equal(
+            DetailOpenTargetKind.Registry,
+            DetailOpenTarget.Detect(
+                @"HKLM\Software\Microsoft\Edge")?.Kind);
+        Assert.Null(DetailOpenTarget.Detect("Stable"));
+    }
+
+    [Fact]
+    public void DetailOpenTargetUsesConfiguredExternalToolService()
+    {
+        RecordingExternalToolService externalTools = new();
+        using MainViewModel viewModel = new(
+            new StubGuiDiscoveryService(),
+            new StubIconProvider(),
+            externalTools: externalTools);
+
+        viewModel.OpenDetailTarget(
+            new DetailOpenTarget(
+                DetailOpenTargetKind.FileSystem,
+                @"C:\Apps\Sample\app.exe"),
+            installationContext: true);
+        viewModel.OpenDetailTarget(
+            new DetailOpenTarget(
+                DetailOpenTargetKind.Registry,
+                @"HKLM\Software\Microsoft\Edge"),
+            installationContext: true);
+
+        Assert.Equal(
+            @"C:\Apps\Sample\app.exe",
+            externalTools.OpenedFileSystemPath);
+        Assert.Equal(
+            @"HKLM\Software\Microsoft\Edge",
+            externalTools.OpenedRegistryPath);
     }
 
     [Fact]
@@ -591,7 +695,8 @@ public sealed class GuiViewModelTests
         viewModel.SelectedInstallation = viewModel.Installations[1];
 
         viewModel.InstallationFilter = "razer";
-        await Task.Delay(300);
+        await WaitForAsync(() =>
+            viewModel.FilteredInstallations.Count == 1);
 
         Assert.Equal(
             @"C:\Program Files\Razer",
@@ -702,6 +807,14 @@ public sealed class GuiViewModelTests
                 ProcessExplorerCommand = @"C:\Tools\procexp.exe /s:{pid}",
                 AdditionalInstallationFolders =
                     [@"C:\Apps", @"C:\Tools"],
+                CommandLineTemplates =
+                [
+                    new CommandLineTemplateSettings
+                    {
+                        Name = "Not in menus",
+                        IsFavorite = false,
+                    },
+                ],
             };
 
             store.Save(expected);
@@ -721,6 +834,8 @@ public sealed class GuiViewModelTests
             Assert.Equal(
                 expected.AdditionalInstallationFolders,
                 loaded.Settings.AdditionalInstallationFolders);
+            Assert.False(Assert.Single(
+                loaded.Settings.CommandLineTemplates).IsFavorite);
         }
         finally
         {
@@ -931,10 +1046,179 @@ public sealed class GuiViewModelTests
             Assert.Single(new GuiSettings().CommandLineTemplates);
 
         Assert.Equal("Enable remote debugging", template.Name);
+        Assert.True(template.IsFavorite);
         Assert.Equal(".*", template.ApplicableExecutableRegex);
         Assert.Contains(
             "--remote-debugging-port=9222",
             template.AddParts);
+    }
+
+    [Fact]
+    public void UnfavoriteTemplateIsExcludedOnlyFromContextMenus()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true) with
+        {
+            ExecutablePath = @"C:\Chrome\chrome.exe",
+            CommandLine = "chrome.exe",
+        };
+        using MainViewModel viewModel = new(
+            new StubGuiDiscoveryService(),
+            new StubIconProvider(),
+            settings: new GuiSettings
+            {
+                CommandLineTemplates =
+                [
+                    new CommandLineTemplateSettings
+                    {
+                        Name = "Hidden from menu",
+                        IsFavorite = false,
+                    },
+                ],
+            });
+        ProcessTreeItemViewModel item = CreateTreeItem(
+            process,
+            "Chrome",
+            "Browser",
+            isHost: false);
+
+        Assert.Single(viewModel.GetApplicableTemplates(item));
+        Assert.Empty(viewModel.GetFavoriteApplicableTemplates(item));
+    }
+
+    [Fact]
+    public async Task CurrentLineSuggestionsPutCompleteArgumentBeforeSwitch()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true) with
+        {
+            CommandLine =
+                "chrome.exe --remote-debugging-port=9222",
+        };
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process],
+                    new ProcessGraph([process], []))),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        await viewModel.RefreshProcessesAsync();
+        viewModel.SetCommandLineSuggestionContext(
+            "--remote-debugging-port=9222",
+            isVisible: true);
+        await WaitForAsync(() =>
+            viewModel.FilteredCommandLineSuggestions.FirstOrDefault()?.Argument
+                == "--remote-debugging-port=9222");
+
+        Assert.Equal(
+            "--remote-debugging-port=9222",
+            viewModel.FilteredCommandLineSuggestions[0].Argument);
+        int switchIndex = viewModel.FilteredCommandLineSuggestions
+            .Select((item, index) => (item.Argument, index))
+            .Single(item => item.Argument == "--remote-debugging-port")
+            .index;
+        Assert.True(switchIndex > 0);
+        Assert.Equal(
+            viewModel.FilteredCommandLineSuggestions.Count,
+            viewModel.FilteredCommandLineSuggestions
+                .Select(item => item.Argument)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count());
+    }
+
+    [Fact]
+    public async Task RunSectionLaunchesFilteredApplicableInstall()
+    {
+        ChromiumInstallation installation = CreateInstallation(
+            "Google Chrome",
+            "Chrome",
+            @"C:\Chrome",
+            kind: "Browser");
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverInstallations = _ => ValueTask.FromResult(
+                new InstallationDiscoveryResult(
+                    SnapshotTime,
+                    [installation],
+                    new InstallationDiscoveryStatistics(
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        TimeSpan.Zero),
+                    [])),
+        };
+        RecordingExternalToolService externalTools = new();
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            externalTools: externalTools);
+
+        await viewModel.RefreshInstallationsAsync();
+        viewModel.CommandLineRunFilter = "chrome";
+        CommandLineRunTargetViewModel target = Assert.Single(
+            viewModel.FilteredCommandLineRunTargets);
+        viewModel.SelectedCommandLineRunTarget = target;
+        viewModel.RunSelectedCommandLineTarget();
+
+        Assert.Equal(installation.ExecutablePath, externalTools.Launch?.Executable);
+        Assert.Contains(
+            "--remote-debugging-port=9222",
+            externalTools.Launch?.Arguments ?? []);
+    }
+
+    [Fact]
+    public async Task RunSectionPreservesProcessIdentityForSharedExecutable()
+    {
+        ProcessSnapshotEntry first = CreateProcess(
+            101,
+            "chrome.exe",
+            true) with
+        {
+            ExecutablePath = @"C:\Chrome\chrome.exe",
+            CommandLine = "chrome.exe --profile-directory=First",
+        };
+        ProcessSnapshotEntry second = CreateProcess(
+            102,
+            "chrome.exe",
+            true) with
+        {
+            ExecutablePath = first.ExecutablePath,
+            CommandLine = "chrome.exe --profile-directory=Second",
+        };
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [first, second],
+                    new ProcessGraph([first, second], []))),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+        await viewModel.RefreshProcessesAsync();
+        CommandLineRunTargetViewModel selected =
+            viewModel.FilteredCommandLineRunTargets.Single(target =>
+                target.Process?.ProcessId == second.ProcessId);
+        viewModel.SelectedCommandLineRunTarget = selected;
+
+        viewModel.CommandLineRunFilter = "chrome";
+
+        Assert.Equal(
+            second.Identity(),
+            viewModel.SelectedCommandLineRunTarget?.Process?.Identity);
     }
 
     [Fact]
@@ -1196,6 +1480,17 @@ public sealed class GuiViewModelTests
         Assert.Contains("Synthetic discovery failure", issue.Message);
     }
 
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(3);
+        while (!condition() && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
+
+        Assert.True(condition(), "The expected asynchronous update did not complete.");
+    }
+
     private static ChromiumDiscoveryResult CreateDiscoveryResult(
         IReadOnlyList<ProcessSnapshotEntry> processes,
         ProcessGraph graph,
@@ -1279,7 +1574,8 @@ public sealed class GuiViewModelTests
         string path,
         string kind = "Application",
         string version = "1.0",
-        bool? isSharedRuntime = false)
+        bool? isSharedRuntime = false,
+        string? channel = null)
     {
         return new ChromiumInstallation(
             name,
@@ -1288,7 +1584,7 @@ public sealed class GuiViewModelTests
             path,
             Path.Combine(path, $"{name}.exe"),
             version,
-            null,
+            channel,
             new InstallationMetadata(
                 "x64",
                 null,
@@ -1425,6 +1721,10 @@ public sealed class GuiViewModelTests
         public (string Executable, IReadOnlyList<string> Arguments)? Launch
         { get; private set; }
 
+        public string? OpenedFileSystemPath { get; private set; }
+
+        public string? OpenedRegistryPath { get; private set; }
+
         public void DebugProcess(int processId, string commandTemplate)
         {
             Debug = (processId, commandTemplate);
@@ -1450,6 +1750,16 @@ public sealed class GuiViewModelTests
             IReadOnlyList<string> arguments)
         {
             Launch = (executablePath, arguments);
+        }
+
+        public void OpenFileSystemPath(string path)
+        {
+            OpenedFileSystemPath = path;
+        }
+
+        public void OpenRegistryPath(string path)
+        {
+            OpenedRegistryPath = path;
         }
     }
 

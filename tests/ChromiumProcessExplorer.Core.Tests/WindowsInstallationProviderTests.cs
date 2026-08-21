@@ -492,6 +492,40 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task ParallelSearchRootsShareGlobalDirectoryLimit()
+    {
+        string[] roots = Enumerable.Range(0, 3)
+            .Select(index => Path.Combine(_root, $"root-{index}"))
+            .ToArray();
+        foreach (string root in roots)
+        {
+            Directory.CreateDirectory(Path.Combine(root, "one", "two"));
+        }
+
+        WindowsInstallationProvider provider = new(
+            new WindowsInstallationDiscoveryOptions(
+                roots,
+                includeKnownLocations: false)
+            {
+                MaximumConcurrency = 3,
+                MaximumDirectories = 2,
+            });
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        Assert.Equal(2, result.Statistics.DirectoryCount);
+        Assert.True(result.Statistics.TruncatedDirectoryCount > 0);
+    }
+
+    [Fact]
+    public void InstallationConcurrencyDefaultsToProcessorCount()
+    {
+        Assert.Equal(
+            Math.Max(1, Environment.ProcessorCount),
+            new WindowsInstallationDiscoveryOptions().MaximumConcurrency);
+    }
+
+    [Fact]
     public async Task IndependentMetadataSourcesRunConcurrently()
     {
         using Barrier barrier = new(3);
