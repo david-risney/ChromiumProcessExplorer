@@ -149,6 +149,69 @@ public partial class MainWindow : Window
                 as InstallationItemViewModel);
     }
 
+    private void ProcessContextMenu_Opened(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is ContextMenu contextMenu
+            && contextMenu.DataContext is ProcessTreeItemViewModel process)
+        {
+            PopulateTemplateMenu(
+                contextMenu,
+                process,
+                _viewModel.GetApplicableTemplates(process));
+        }
+    }
+
+    private void InstallationContextMenu_Opened(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is ContextMenu contextMenu
+            && contextMenu.PlacementTarget is DataGrid dataGrid
+            && dataGrid.SelectedItem is InstallationItemViewModel installation)
+        {
+            PopulateTemplateMenu(
+                contextMenu,
+                installation,
+                _viewModel.GetApplicableTemplates(installation));
+        }
+    }
+
+    private void LaunchWithTemplate_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).Tag
+            is not TemplateLaunchRequest request)
+        {
+            return;
+        }
+
+        if (request.Target is ProcessTreeItemViewModel process)
+        {
+            _viewModel.LaunchWithTemplate(process, request.Template);
+        }
+        else if (request.Target is InstallationItemViewModel installation)
+        {
+            _viewModel.LaunchWithTemplate(installation, request.Template);
+        }
+    }
+
+    private void AddCommandLineTemplate_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _viewModel.AddCommandLineTemplate();
+    }
+
+    private void RemoveCommandLineTemplate_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _viewModel.RemoveSelectedCommandLineTemplate();
+    }
+
     private void Installations_Sorting(
         object sender,
         DataGridSortingEventArgs e)
@@ -242,6 +305,46 @@ public partial class MainWindow : Window
             MessageBoxImage.Warning);
     }
 
+    private void PopulateTemplateMenu(
+        ContextMenu contextMenu,
+        object target,
+        IReadOnlyList<CommandLineTemplateViewModel> templates)
+    {
+        MenuItem? submenu = contextMenu.Items
+            .OfType<MenuItem>()
+            .FirstOrDefault(item => string.Equals(
+                item.Tag as string,
+                "command-templates",
+                StringComparison.Ordinal));
+        if (submenu is null)
+        {
+            return;
+        }
+
+        submenu.Items.Clear();
+        submenu.IsEnabled = templates.Count > 0;
+        if (templates.Count == 0)
+        {
+            submenu.Items.Add(new MenuItem
+            {
+                Header = "No applicable templates",
+                IsEnabled = false,
+            });
+            return;
+        }
+
+        foreach (CommandLineTemplateViewModel template in templates)
+        {
+            MenuItem item = new()
+            {
+                Header = template.Name,
+                Tag = new TemplateLaunchRequest(target, template),
+            };
+            item.Click += LaunchWithTemplate_Click;
+            submenu.Items.Add(item);
+        }
+    }
+
     private sealed class InstallationComparer(
         string property,
         ListSortDirection direction) : IComparer
@@ -325,4 +428,8 @@ public partial class MainWindow : Window
             settingsStore: settingsStore,
             settingsLoadError: loadResult.Error);
     }
+
+    private sealed record TemplateLaunchRequest(
+        object Target,
+        CommandLineTemplateViewModel Template);
 }

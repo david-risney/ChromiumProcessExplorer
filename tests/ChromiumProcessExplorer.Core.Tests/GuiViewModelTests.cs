@@ -787,6 +787,156 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
+    public void CommandTemplateRemovesArgumentsAndMergesValuedSwitches()
+    {
+        CommandLineTemplateSettings template = new()
+        {
+            AddParts =
+            [
+                "--enable-features=B,C",
+                "--new-switch",
+            ],
+            RemoveParts =
+            [
+                new CommandLineRemovalSettings("--obsolete", false),
+                new CommandLineRemovalSettings("^--remove-me$", true),
+            ],
+        };
+
+        IReadOnlyList<string> arguments =
+            CommandLineTemplateTransformer.Apply(
+                "\"C:\\Chrome\\chrome.exe\" --enable-features=A "
+                    + "--obsolete=value --remove-me --enable-features=B",
+                template);
+
+        Assert.Equal(
+            ["--enable-features=A,B,C", "--new-switch"],
+            arguments);
+    }
+
+    [Fact]
+    public void CommandTemplateReplacesDuplicateScalarSwitch()
+    {
+        CommandLineTemplateSettings template = new()
+        {
+            AddParts = ["--remote-debugging-port=9222"],
+        };
+
+        IReadOnlyList<string> arguments =
+            CommandLineTemplateTransformer.Apply(
+                "chrome.exe --remote-debugging-port=9333",
+                template);
+
+        Assert.Equal(["--remote-debugging-port=9222"], arguments);
+    }
+
+    [Fact]
+    public void CommandTemplateAddsSwitchesBeforeArgumentTerminator()
+    {
+        CommandLineTemplateSettings template = new()
+        {
+            AddParts = ["--remote-debugging-port=9222"],
+            RemoveParts =
+            [
+                new CommandLineRemovalSettings("^--after$", true),
+            ],
+        };
+
+        IReadOnlyList<string> arguments =
+            CommandLineTemplateTransformer.Apply(
+                "chrome.exe --existing -- --after positional",
+                template);
+
+        Assert.Equal(
+            [
+                "--existing",
+                "--remote-debugging-port=9222",
+                "--",
+                "--after",
+                "positional",
+            ],
+            arguments);
+    }
+
+    [Fact]
+    public void NewSettingsIncludeRemoteDebuggingTemplate()
+    {
+        CommandLineTemplateSettings template =
+            Assert.Single(new GuiSettings().CommandLineTemplates);
+
+        Assert.Equal("Enable remote debugging", template.Name);
+        Assert.Equal(".*", template.ApplicableExecutableRegex);
+        Assert.Contains(
+            "--remote-debugging-port=9222",
+            template.AddParts);
+    }
+
+    [Fact]
+    public async Task BrowserTemplateLaunchUsesOriginalArguments()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true) with
+        {
+            ExecutablePath = @"C:\Chrome\chrome.exe",
+            CommandLine = "\"C:\\Chrome\\chrome.exe\" --profile-directory=Test",
+        };
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process],
+                    new ProcessGraph([process], []))),
+        };
+        RecordingExternalToolService externalTools = new();
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            externalTools: externalTools);
+        await viewModel.RefreshProcessesAsync();
+        ProcessTreeItemViewModel item =
+            Assert.Single(viewModel.FilteredProcessRoots);
+        CommandLineTemplateViewModel template =
+            Assert.Single(viewModel.GetApplicableTemplates(item));
+
+        viewModel.LaunchWithTemplate(item, template);
+
+        Assert.Equal(@"C:\Chrome\chrome.exe", externalTools.Launch?.Executable);
+        Assert.Equal(
+            ["--profile-directory=Test", "--remote-debugging-port=9222"],
+            externalTools.Launch?.Arguments);
+    }
+
+    [Fact]
+    public void TemplatesExcludeHostsSubprocessesAndWebView2()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "msedgewebview2.exe",
+            true) with
+        {
+            ExecutablePath = @"C:\WebView2\msedgewebview2.exe",
+        };
+        using MainViewModel viewModel = new(
+            new StubGuiDiscoveryService(),
+            new StubIconProvider());
+
+        Assert.Empty(viewModel.GetApplicableTemplates(
+            CreateTreeItem(process, "WebView2", "Browser", isHost: false)));
+        Assert.Empty(viewModel.GetApplicableTemplates(
+            CreateTreeItem(process, "Chrome", "Renderer", isHost: false)));
+        Assert.Empty(viewModel.GetApplicableTemplates(
+            CreateTreeItem(process, "Electron", "Browser", isHost: true)));
+        Assert.Empty(viewModel.GetApplicableTemplates(
+            CreateTreeItem(
+                process with { CommandLine = null },
+                "Chrome",
+                "Browser",
+                isHost: false)));
+    }
+
+    [Fact]
     public async Task StaleSelectionUsesCachedDetailsWithoutQueryingReusedPid()
     {
         ProcessSnapshotEntry process = CreateProcess(
@@ -998,6 +1148,26 @@ public sealed class GuiViewModelTests
                 }));
     }
 
+    private static ProcessTreeItemViewModel CreateTreeItem(
+        ProcessSnapshotEntry process,
+        string platform,
+        string role,
+        bool isHost)
+    {
+        return new ProcessTreeItemViewModel(
+            process.Identity,
+            new ProcessPresentationDescriptor(
+                process.Identity(),
+                process,
+                platform,
+                role,
+                isHost,
+                false),
+            false,
+            false,
+            []);
+    }
+
     private static ProcessSnapshotEntry CreateProcess(
         int processId,
         string imageName,
@@ -1078,6 +1248,9 @@ public sealed class GuiViewModelTests
         public (string Image, string? Package, string Command)? Future
         { get; private set; }
 
+        public (string Executable, IReadOnlyList<string> Arguments)? Launch
+        { get; private set; }
+
         public void DebugProcess(int processId, string commandTemplate)
         {
             Debug = (processId, commandTemplate);
@@ -1096,6 +1269,13 @@ public sealed class GuiViewModelTests
             string debuggerCommand)
         {
             Future = (imageName, packageFullName, debuggerCommand);
+        }
+
+        public void LaunchExecutable(
+            string executablePath,
+            IReadOnlyList<string> arguments)
+        {
+            Launch = (executablePath, arguments);
         }
     }
 

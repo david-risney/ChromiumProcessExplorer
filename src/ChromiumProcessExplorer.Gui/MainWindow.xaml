@@ -239,7 +239,8 @@
                                                           ItemsSource="{Binding Children}">
                                     <Grid Margin="1">
                                         <Grid.ContextMenu>
-                                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
+                                                         Opened="ProcessContextMenu_Opened">
                                                 <MenuItem Header="Copy"
                                                           Click="CopyProcess_Click" />
                                                 <MenuItem Header="Copy Details"
@@ -251,6 +252,9 @@
                                                           Click="DebugFutureProcess_Click" />
                                                 <MenuItem Header="Process Explorer"
                                                           Click="OpenProcessExplorer_Click" />
+                                                <Separator />
+                                                <MenuItem Header="Relaunch with Template"
+                                                          Tag="command-templates" />
                                             </ContextMenu>
                                         </Grid.ContextMenu>
                                         <Grid.Style>
@@ -612,7 +616,7 @@
                                       ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                       Sorting="Installations_Sorting">
                                 <DataGrid.ContextMenu>
-                                    <ContextMenu>
+                                    <ContextMenu Opened="InstallationContextMenu_Opened">
                                         <MenuItem Header="Copy"
                                                   Click="CopyInstallation_Click"
                                                   Tag="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
@@ -623,6 +627,9 @@
                                         <MenuItem Header="Debug Future Launches"
                                                   Click="DebugFutureInstallation_Click"
                                                   Tag="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                        <Separator />
+                                        <MenuItem Header="Launch with Template"
+                                                  Tag="command-templates" />
                                     </ContextMenu>
                                 </DataGrid.ContextMenu>
                                 <DataGrid.Columns>
@@ -754,6 +761,136 @@
                                           ItemsSource="{Binding SelectedDevTools.Details}" />
                         </GroupBox>
                     </ScrollViewer>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Command Line Templates">
+                <Grid Margin="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="300" MinWidth="240" />
+                        <ColumnDefinition Width="5" />
+                        <ColumnDefinition Width="*" MinWidth="420" />
+                    </Grid.ColumnDefinitions>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Margin="0,0,0,8"
+                                    Orientation="Horizontal">
+                            <Button Padding="12,4"
+                                    Click="AddCommandLineTemplate_Click"
+                                    Content="Add" />
+                            <Button Margin="6,0,0,0"
+                                    Padding="12,4"
+                                    Click="RemoveCommandLineTemplate_Click"
+                                    Content="Remove" />
+                        </StackPanel>
+                        <ListBox Grid.Row="1"
+                                 DisplayMemberPath="Name"
+                                 ItemsSource="{Binding CommandLineTemplates}"
+                                 SelectedItem="{Binding SelectedCommandLineTemplate}" />
+                    </Grid>
+                    <GridSplitter Grid.Column="1"
+                                  Width="5"
+                                  Background="#FFE1E5EB" />
+                    <Grid Grid.Column="2"
+                          Margin="12,0,0,0">
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontSize="18"
+                                   Foreground="#FF6A7380"
+                                   Text="Add or select a command line template.">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedCommandLineTemplate}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ScrollViewer.Style>
+                                <Style TargetType="ScrollViewer">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedCommandLineTemplate}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ScrollViewer.Style>
+                            <StackPanel DataContext="{Binding SelectedCommandLineTemplate}">
+                                <GroupBox Header="Template"
+                                          Style="{StaticResource SectionCard}">
+                                    <StackPanel>
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="Name" />
+                                        <TextBox Margin="0,5,0,12"
+                                                 Padding="6"
+                                                 Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="Applicable executable regex" />
+                                        <TextBlock Margin="0,2,0,5"
+                                                   Foreground="#FF5B6472"
+                                                   Text="Matched against the executable file name. The default .* matches every executable." />
+                                        <TextBox Padding="6"
+                                                 FontFamily="Consolas"
+                                                 Text="{Binding ApplicableExecutableRegex, UpdateSourceTrigger=PropertyChanged}" />
+                                    </StackPanel>
+                                </GroupBox>
+                                <GroupBox Header="Command line parts to add"
+                                          Style="{StaticResource SectionCard}">
+                                    <StackPanel>
+                                        <TextBlock Foreground="#FF5B6472"
+                                                   Text="Enter one complete argument per line, such as --remote-debugging-port=9222."
+                                                   TextWrapping="Wrap" />
+                                        <TextBox MinHeight="130"
+                                                 Margin="0,8,0,0"
+                                                 Padding="6"
+                                                 AcceptsReturn="True"
+                                                 FontFamily="Consolas"
+                                                 Text="{Binding AddPartsText, UpdateSourceTrigger=PropertyChanged}"
+                                                 VerticalScrollBarVisibility="Auto" />
+                                    </StackPanel>
+                                </GroupBox>
+                                <GroupBox Header="Command line parts to remove"
+                                          Style="{StaticResource SectionCard}">
+                                    <StackPanel>
+                                        <TextBlock Foreground="#FF5B6472"
+                                                   Text="Enter one argument or switch per line. Prefix a regular expression with regex:. A switch without = removes that switch with any value."
+                                                   TextWrapping="Wrap" />
+                                        <TextBox MinHeight="130"
+                                                 Margin="0,8,0,0"
+                                                 Padding="6"
+                                                 AcceptsReturn="True"
+                                                 FontFamily="Consolas"
+                                                 Text="{Binding RemovePartsText, UpdateSourceTrigger=PropertyChanged}"
+                                                 VerticalScrollBarVisibility="Auto" />
+                                    </StackPanel>
+                                </GroupBox>
+                                <Border Padding="8"
+                                        Background="#FFFFECEC">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ValidationError}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock Text="{Binding ValidationError}"
+                                               TextWrapping="Wrap" />
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
                 </Grid>
             </TabItem>
 

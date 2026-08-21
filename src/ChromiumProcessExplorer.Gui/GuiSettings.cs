@@ -16,6 +16,10 @@ public sealed record GuiSettings
 
     public IReadOnlyList<string> AdditionalInstallationFolders { get; init; } =
         [];
+
+    public IReadOnlyList<CommandLineTemplateSettings> CommandLineTemplates
+    { get; init; } =
+        [CommandLineTemplateSettings.CreateRemoteDebugging()];
 }
 
 public sealed record GuiSettingsLoadResult(
@@ -109,6 +113,36 @@ public sealed class JsonGuiSettingsStore : IGuiSettingsStore
                     .Select(path => path.Trim())
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
+            CommandLineTemplates = (settings.CommandLineTemplates
+                    ?? [CommandLineTemplateSettings.CreateRemoteDebugging()])
+                .Select(NormalizeTemplate)
+                .ToArray(),
+        };
+    }
+
+    private static CommandLineTemplateSettings NormalizeTemplate(
+        CommandLineTemplateSettings template)
+    {
+        return template with
+        {
+            Id = string.IsNullOrWhiteSpace(template.Id)
+                ? Guid.NewGuid().ToString("N")
+                : template.Id,
+            Name = string.IsNullOrWhiteSpace(template.Name)
+                ? "Unnamed template"
+                : template.Name.Trim(),
+            ApplicableExecutableRegex =
+                string.IsNullOrWhiteSpace(template.ApplicableExecutableRegex)
+                    ? ".*"
+                    : template.ApplicableExecutableRegex.Trim(),
+            AddParts = (template.AddParts ?? [])
+                .Where(part => !string.IsNullOrWhiteSpace(part))
+                .Select(part => part.Trim())
+                .ToArray(),
+            RemoveParts = (template.RemoveParts ?? [])
+                .Where(part => !string.IsNullOrWhiteSpace(part.Pattern))
+                .Select(part => part with { Pattern = part.Pattern.Trim() })
+                .ToArray(),
         };
     }
 

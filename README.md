@@ -174,6 +174,16 @@ allow extra installation search folders and remember the process auto-refresh
 choice. They are saved to
 `%LOCALAPPDATA%\ChromiumProcessExplorer\settings.json`.
 
+The Command Line Templates tab manages named launch modifications. Each
+template has an executable-name regular expression, arguments to add, and
+literal or `regex:` removal rules. Duplicate comma-list switches such as
+`--enable-features` are merged and scalar switches are replaced by the last
+configured value. A default `Enable remote debugging` template adds
+`--remote-debugging-port=9222`. Applicable templates appear in process and
+install context menus. Process relaunch is limited to live browser-role
+processes and is unavailable for WebView2, hosts, renderers, GPU processes, and
+utility processes; install launch is also unavailable for WebView2.
+
 Process-tree badges use a stable category palette:
 
 - purple identifies the platform or product, such as CEF, WebView2, Electron,

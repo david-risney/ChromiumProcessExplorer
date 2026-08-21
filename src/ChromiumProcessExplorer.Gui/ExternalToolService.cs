@@ -16,6 +16,10 @@ public interface IExternalToolService
         string imageName,
         string? packageFullName,
         string debuggerCommand);
+
+    void LaunchExecutable(
+        string executablePath,
+        IReadOnlyList<string> arguments);
 }
 
 public sealed class WindowsExternalToolService : IExternalToolService
@@ -51,6 +55,24 @@ public sealed class WindowsExternalToolService : IExternalToolService
         startInfo.ArgumentList.Add(imageName);
         startInfo.ArgumentList.Add(packageFullName ?? string.Empty);
         startInfo.ArgumentList.Add(debuggerCommand);
+        Start(startInfo);
+    }
+
+    public void LaunchExecutable(
+        string executablePath,
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+        ArgumentNullException.ThrowIfNull(arguments);
+        ProcessStartInfo startInfo = new(executablePath)
+        {
+            UseShellExecute = true,
+        };
+        foreach (string argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
         Start(startInfo);
     }
 

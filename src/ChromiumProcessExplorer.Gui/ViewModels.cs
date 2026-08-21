@@ -40,6 +40,10 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
 
     public string ImageName => Descriptor.Process.ImageName;
 
+    public string? ExecutablePath => Descriptor.Process.ExecutablePath;
+
+    public string? CommandLine => Descriptor.Process.CommandLine;
+
     public string Platform => Descriptor.Platform;
 
     public string Role => Descriptor.Role;
@@ -217,6 +221,8 @@ public sealed class InstallationItemViewModel : ObservableObject
 
     public string InstallPath => Installation.InstallPath;
 
+    public string? ExecutablePath => Installation.ExecutablePath;
+
     public ImageSource? Icon
     {
         get => _icon;
@@ -337,6 +343,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private ProcessInspectorViewModel? _processInspector;
     private InstallationItemViewModel? _selectedInstallation;
     private DevToolsItemViewModel? _selectedDevTools;
+    private CommandLineTemplateViewModel? _selectedCommandLineTemplate;
     private string _processFilter = string.Empty;
     private string _installationFilter = string.Empty;
     private string? _mojoPipeFingerprint;
@@ -376,6 +383,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             Environment.NewLine,
             initialSettings.AdditionalInstallationFolders);
         _settingsStatus = settingsLoadError ?? "Settings are saved automatically.";
+        foreach (CommandLineTemplateSettings template in
+            initialSettings.CommandLineTemplates)
+        {
+            CommandLineTemplates.Add(
+                new CommandLineTemplateViewModel(template, SaveSettings));
+        }
+
+        SelectedCommandLineTemplate = CommandLineTemplates.FirstOrDefault();
         _autoRefreshInterval = autoRefreshInterval ?? TimeSpan.FromSeconds(2);
         if (_autoRefreshInterval <= TimeSpan.Zero)
         {
@@ -402,6 +417,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<ContextIssueViewModel> InstallationNotices { get; } = [];
 
     public ObservableCollection<ContextIssueViewModel> DevToolsNotices { get; } = [];
+
+    public ObservableCollection<CommandLineTemplateViewModel>
+        CommandLineTemplates
+    { get; } = [];
 
     public ProcessTreeItemViewModel? SelectedProcess
     {
@@ -442,6 +461,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         get => _selectedDevTools;
         set => SetField(ref _selectedDevTools, value);
+    }
+
+    public CommandLineTemplateViewModel? SelectedCommandLineTemplate
+    {
+        get => _selectedCommandLineTemplate;
+        set => SetField(ref _selectedCommandLineTemplate, value);
     }
 
     public string ProcessFilter
@@ -1095,6 +1120,116 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    public void AddCommandLineTemplate()
+    {
+        CommandLineTemplateViewModel template = new(
+            new CommandLineTemplateSettings(),
+            SaveSettings);
+        CommandLineTemplates.Add(template);
+        SelectedCommandLineTemplate = template;
+        SaveSettings();
+    }
+
+    public void RemoveSelectedCommandLineTemplate()
+    {
+        if (SelectedCommandLineTemplate is null)
+        {
+            return;
+        }
+
+        int index = CommandLineTemplates.IndexOf(
+            SelectedCommandLineTemplate);
+        CommandLineTemplates.Remove(SelectedCommandLineTemplate);
+        SelectedCommandLineTemplate = CommandLineTemplates.Count == 0
+            ? null
+            : CommandLineTemplates[Math.Min(
+                index,
+                CommandLineTemplates.Count - 1)];
+        SaveSettings();
+    }
+
+    public IReadOnlyList<CommandLineTemplateViewModel>
+        GetApplicableTemplates(ProcessTreeItemViewModel process)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        if (process.IsStale
+            || process.IsHost
+            || !string.Equals(
+                process.Role,
+                "Browser",
+                StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                process.Platform,
+                "WebView2",
+                StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(process.ExecutablePath)
+            || string.IsNullOrWhiteSpace(process.CommandLine))
+        {
+            return [];
+        }
+
+        return GetApplicableTemplates(process.ImageName);
+    }
+
+    public IReadOnlyList<CommandLineTemplateViewModel>
+        GetApplicableTemplates(InstallationItemViewModel installation)
+    {
+        ArgumentNullException.ThrowIfNull(installation);
+        if (string.Equals(
+                installation.Platform,
+                "WebView2",
+                StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(installation.ExecutablePath))
+        {
+            return [];
+        }
+
+        return GetApplicableTemplates(
+            Path.GetFileName(installation.ExecutablePath));
+    }
+
+    public void LaunchWithTemplate(
+        ProcessTreeItemViewModel process,
+        CommandLineTemplateViewModel template)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(template);
+        if (!GetApplicableTemplates(process).Contains(template))
+        {
+            AddProcessActionIssue(
+                "The selected template does not apply to this process.");
+            return;
+        }
+
+        LaunchWithTemplate(
+            process.ExecutablePath!,
+            process.CommandLine,
+            template,
+            AddProcessActionIssue,
+            message => Status = message);
+    }
+
+    public void LaunchWithTemplate(
+        InstallationItemViewModel installation,
+        CommandLineTemplateViewModel template)
+    {
+        ArgumentNullException.ThrowIfNull(installation);
+        ArgumentNullException.ThrowIfNull(template);
+        if (!GetApplicableTemplates(installation).Contains(template))
+        {
+            AddInstallationActionIssue(
+                "The selected template does not apply to this install.");
+            return;
+        }
+
+        LaunchWithTemplate(
+            installation.ExecutablePath!,
+            null,
+            template,
+            AddInstallationActionIssue,
+            message => InstallationStatus = message);
+    }
+
     private string[] GetAdditionalInstallationFolders()
     {
         return AdditionalInstallationFoldersText
@@ -1123,6 +1258,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 ProcessExplorerCommand = ProcessExplorerCommand,
                 AdditionalInstallationFolders =
                     GetAdditionalInstallationFolders(),
+                CommandLineTemplates = CommandLineTemplates
+                    .Select(template => template.ToSettings())
+                    .ToArray(),
             });
             SettingsStatus = "Settings saved.";
         }
@@ -1185,6 +1323,50 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         InstallationStatus = message;
+    }
+
+    private CommandLineTemplateViewModel[]
+        GetApplicableTemplates(string executableName)
+    {
+        return CommandLineTemplates
+            .Where(template => template.AppliesTo(executableName))
+            .ToArray();
+    }
+
+    private void LaunchWithTemplate(
+        string executablePath,
+        string? commandLine,
+        CommandLineTemplateViewModel template,
+        Action<string> reportError,
+        Action<string> reportSuccess)
+    {
+        if (!template.IsValid)
+        {
+            reportError(template.ValidationError ?? "The template is invalid.");
+            return;
+        }
+
+        try
+        {
+            IReadOnlyList<string> arguments =
+                CommandLineTemplateTransformer.Apply(
+                    commandLine,
+                    template.ToSettings());
+            _externalTools.LaunchExecutable(executablePath, arguments);
+            reportSuccess(
+                $"Launched {Path.GetFileName(executablePath)} with "
+                + $"template \"{template.Name}\".");
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or FormatException
+            or InvalidOperationException
+            or IOException
+            or System.Security.SecurityException
+            or System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            reportError(exception.Message);
+        }
     }
 
     private async Task ApplyProcessResultAsync(
