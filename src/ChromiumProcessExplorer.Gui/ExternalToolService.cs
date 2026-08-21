@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using ChromiumProcessExplorer.Core.Discovery;
 using Microsoft.Win32;
 
 namespace ChromiumProcessExplorer.Gui;
@@ -11,6 +12,8 @@ public interface IExternalToolService
     void DebugProcess(int processId, string commandTemplate);
 
     void OpenProcessExplorer(int processId, string commandTemplate);
+
+    Task TerminateProcessTreeAsync(ProcessIdentity identity);
 
     void DebugFutureLaunches(
         string imageName,
@@ -38,6 +41,29 @@ public sealed class WindowsExternalToolService : IExternalToolService
     {
         LaunchTemplate(commandTemplate, ("{pid}", processId.ToString(
             System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    public async Task TerminateProcessTreeAsync(ProcessIdentity identity)
+    {
+        if (identity.CreationTime is null)
+        {
+            throw new InvalidOperationException(
+                "The process creation time is unavailable, so its generation "
+                + "cannot be verified before termination.");
+        }
+
+        using Process process = Process.GetProcessById(identity.ProcessId);
+        DateTimeOffset actualCreationTime =
+            new(process.StartTime.ToUniversalTime());
+        if (actualCreationTime != identity.CreationTime)
+        {
+            throw new InvalidOperationException(
+                $"PID {identity.ProcessId} now identifies a different process "
+                + "generation. Refresh the process list before trying again.");
+        }
+
+        process.Kill(entireProcessTree: true);
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
     }
 
     public void DebugFutureLaunches(
@@ -72,9 +98,15 @@ public sealed class WindowsExternalToolService : IExternalToolService
         {
             UseShellExecute = true,
         };
+        string executableName = Path.GetFileNameWithoutExtension(executablePath);
         foreach (string argument in arguments)
         {
-            startInfo.ArgumentList.Add(argument);
+            startInfo.ArgumentList.Add(
+                Environment.ExpandEnvironmentVariables(argument)
+                    .Replace(
+                        "{executable}",
+                        executableName,
+                        StringComparison.OrdinalIgnoreCase));
         }
 
         Start(startInfo);

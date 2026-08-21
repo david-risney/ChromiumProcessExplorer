@@ -43,7 +43,11 @@ public sealed record CommandLineTemplateSettings
             Name = "Enable remote debugging",
             ApplicableExecutableRegex = ".*",
             IsFavorite = true,
-            AddParts = ["--remote-debugging-port=9222"],
+            AddParts =
+            [
+                "--remote-debugging-port=9222",
+                "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
+            ],
         };
     }
 }

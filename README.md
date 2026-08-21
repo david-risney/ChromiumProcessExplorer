@@ -143,7 +143,11 @@ Processes that just exited remain gray and selectable for one refresh so their
 captured details are not lost, then disappear on the next refresh. The
 Installs and DevTools tabs present processed, actionable information
 instead of raw discovery JSON or internal Mojo-pipe records. All discovery is
-performed through public Core APIs.
+performed through public Core APIs. DevTools refreshes with process discovery
+and also has explicit Refresh and Cancel controls. It identifies endpoints as
+`executable.exe (PID)` and lists actionable TCP endpoints; inherited private
+debugging pipes are omitted because they are point-to-point transports owned by
+their launching controller and cannot be attached to safely by the GUI.
 
 Process auto refresh is enabled by default. The GUI polls only the visible Mojo
 pipe-name set on a short interval; it performs the expensive process, handle,
@@ -159,7 +163,9 @@ combined. The initial process and installation refreshes run together at
 startup. Filesystem and registry values in process and installation details
 have compact buttons for opening Explorer or Registry Editor. Both process and
 install rows provide context-menu actions for copying a summary or complete
-human-readable details.
+human-readable details. Process context menus also provide **Kill Tree**, which
+verifies the captured process generation before terminating the selected
+process and its descendants.
 Install versions sort by their numeric components, channels sort Stable, Beta,
 Dev, Canary, Internal, then FixedApp, and app-bundled runtimes are labeled
 `FixedApp`.
@@ -170,7 +176,8 @@ limit. Registry, Windows package, and browser-managed app discovery also run in
 parallel with the filesystem scan.
 
 Process context menus can launch the configured debugger for the selected PID,
-open Process Explorer at that PID, or configure future-launch debugging.
+open Process Explorer at that PID, terminate its process tree, or configure
+future-launch debugging.
 Desktop executables use the Image File Execution Options `Debugger` value;
 packaged processes and installs use `PLMDebug /enableDebug`. Future-launch
 configuration starts a narrowly scoped elevated copy of the GUI because these
@@ -188,8 +195,13 @@ template has an executable-name regular expression, arguments to add, and
 literal or `regex:` removal rules. Duplicate comma-list switches such as
 `--enable-features` are merged and scalar switches are replaced by the last
 configured value. A default `Enable remote debugging` template adds
-`--remote-debugging-port=9222`. Applicable templates appear in process and
-install context menus. Process relaunch is limited to live browser-role
+`--remote-debugging-port=9222` and a product-specific non-default user-data
+directory under
+`%LOCALAPPDATA%\ChromiumProcessExplorer\RemoteDebugging\{executable}`. The
+separate profile is required because
+[Chrome 136 and later ignore remote debugging switches for the default Chrome profile](https://developer.chrome.com/blog/remote-debugging-port).
+Applicable templates appear in process and install context menus. Process
+relaunch is limited to live browser-role
 processes and is unavailable for WebView2, hosts, renderers, GPU processes, and
 utility processes; install launch is also unavailable for WebView2.
 

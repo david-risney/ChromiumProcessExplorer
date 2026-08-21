@@ -103,6 +103,29 @@ public partial class MainWindow : Window
                 as ProcessTreeItemViewModel);
     }
 
+    private async void KillProcessTree_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext
+            is not ProcessTreeItemViewModel process)
+        {
+            return;
+        }
+
+        MessageBoxResult confirmation = MessageBox.Show(
+            $"Terminate {process.ImageName} ({process.ProcessId}) and all of "
+                + "its descendant processes?",
+            "Kill process tree",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (confirmation == MessageBoxResult.Yes)
+        {
+            await _viewModel.KillProcessTreeAsync(process);
+        }
+    }
+
     private async void CopyProcessDetails_Click(
         object sender,
         RoutedEventArgs e)
@@ -368,6 +391,13 @@ public partial class MainWindow : Window
     {
         await _viewModel.SelectDevToolsAsync(
             ((DataGrid)sender).SelectedItem as DevToolsItemViewModel);
+    }
+
+    private async void RefreshDevTools_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await _viewModel.RefreshProcessesAsync();
     }
 
     private void OpenDetailTarget_Click(

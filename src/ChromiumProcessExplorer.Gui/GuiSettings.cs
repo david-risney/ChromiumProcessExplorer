@@ -123,6 +123,16 @@ public sealed class JsonGuiSettingsStore : IGuiSettingsStore
     private static CommandLineTemplateSettings NormalizeTemplate(
         CommandLineTemplateSettings template)
     {
+        IReadOnlyList<string> addParts = (template.AddParts ?? [])
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .Select(part => part.Trim())
+            .ToArray();
+        if (IsLegacyRemoteDebuggingTemplate(template, addParts))
+        {
+            addParts = CommandLineTemplateSettings.CreateRemoteDebugging()
+                .AddParts;
+        }
+
         return template with
         {
             Id = string.IsNullOrWhiteSpace(template.Id)
@@ -135,15 +145,28 @@ public sealed class JsonGuiSettingsStore : IGuiSettingsStore
                 string.IsNullOrWhiteSpace(template.ApplicableExecutableRegex)
                     ? ".*"
                     : template.ApplicableExecutableRegex.Trim(),
-            AddParts = (template.AddParts ?? [])
-                .Where(part => !string.IsNullOrWhiteSpace(part))
-                .Select(part => part.Trim())
-                .ToArray(),
+            AddParts = addParts,
             RemoveParts = (template.RemoveParts ?? [])
                 .Where(part => !string.IsNullOrWhiteSpace(part.Pattern))
                 .Select(part => part with { Pattern = part.Pattern.Trim() })
                 .ToArray(),
         };
+    }
+
+    private static bool IsLegacyRemoteDebuggingTemplate(
+        CommandLineTemplateSettings template,
+        IReadOnlyList<string> addParts)
+    {
+        return string.Equals(
+                template.Id,
+                "remote-debugging",
+                StringComparison.Ordinal)
+            && addParts.Count == 1
+            && string.Equals(
+                addParts[0],
+                "--remote-debugging-port=9222",
+                StringComparison.OrdinalIgnoreCase)
+            && (template.RemoveParts?.Count ?? 0) == 0;
     }
 
     private static string UseDefault(string? value, string fallback)

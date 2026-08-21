@@ -287,14 +287,26 @@ public sealed class InstallationItemViewModel : ObservableObject
 
 public sealed class DevToolsItemViewModel
 {
-    public DevToolsItemViewModel(CdpTransportInfo transport)
+    public DevToolsItemViewModel(
+        CdpTransportInfo transport,
+        string? imageName)
     {
         Transport = transport;
+        ImageName = imageName;
     }
 
     public CdpTransportInfo Transport { get; }
 
     public int ProcessId => Transport.ProcessId;
+
+    public string? ImageName { get; }
+
+    public string ProcessLabel =>
+        $"{ImageName ?? "process"} ({ProcessId})";
+
+    public string SelectionKey =>
+        $"{ProcessId}|{Transport.Kind}|{Transport.Port}|"
+        + $"{Transport.ConfiguredValue}";
 
     public string Availability => Transport.Status switch
     {
@@ -347,6 +359,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly HashSet<string> _dismissedProcessNotices =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dismissedInstallationNotices =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _dismissedDevToolsNotices =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly TimeSpan _autoRefreshInterval;
     private CancellationTokenSource? _processRefreshCancellation;
@@ -1095,6 +1109,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             _dismissedInstallationNotices.Add(notice.Message);
         }
+
+        if (DevToolsNotices.Remove(notice))
+        {
+            _dismissedDevToolsNotices.Add(notice.Message);
+        }
     }
 
     public void DismissProcessNotice(ContextIssueViewModel? notice)
@@ -1232,6 +1251,35 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 process.ProcessId,
                 ProcessExplorerCommand),
             $"Opened Process Explorer for PID {process.ProcessId}.");
+    }
+
+    public async Task KillProcessTreeAsync(ProcessTreeItemViewModel? process)
+    {
+        if (process is null || process.IsStale)
+        {
+            AddProcessActionIssue(
+                "Select a running process before terminating its process tree.");
+            return;
+        }
+
+        try
+        {
+            await _externalTools.TerminateProcessTreeAsync(process.Identity);
+            Status = $"Terminated {process.ImageName} ({process.ProcessId}) "
+                + "and its descendants.";
+            await RefreshProcessesAsync();
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or InvalidOperationException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException
+            or System.ComponentModel.Win32Exception
+            or TimeoutException)
+        {
+            AddProcessActionIssue(exception.Message);
+        }
     }
 
     public async Task DebugFutureLaunchesAsync(
@@ -1890,6 +1938,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CancellationToken cancellationToken)
     {
         ProcessIdentity? selectedIdentity = SelectedProcess?.Identity;
+        string? selectedDevToolsKey = SelectedDevTools?.SelectionKey;
         ProcessTreeItemViewModel[] previousRoots = ProcessRoots.ToArray();
         ProcessPresentationTree presentation =
             ProcessPresentationTreeBuilder.Build(result);
@@ -1926,14 +1975,29 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Replace(
             DevTools,
             result.Cdp.Transports
-                .Select(transport => new DevToolsItemViewModel(transport))
+                .Where(transport => transport.Kind == CdpTransportKind.Tcp)
+                .Select(transport => new DevToolsItemViewModel(
+                    transport,
+                    result.Processes.FirstOrDefault(process =>
+                        process.ProcessId == transport.ProcessId)?.ImageName))
                 .OrderBy(item => item.ProcessId));
         Replace(
             DevToolsNotices,
-            result.Cdp.Issues.Select(issue => new ContextIssueViewModel(
-                issue.Stage,
-                issue.Message)));
-        SelectedDevTools = DevTools.FirstOrDefault();
+            result.Cdp.Issues
+                .Where(issue => !issue.Stage.Contains(
+                    "pipe",
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(issue => new ContextIssueViewModel(
+                    issue.Stage,
+                    issue.Message))
+                .Where(issue => !_dismissedDevToolsNotices.Contains(
+                    issue.Message))
+                .DistinctBy(
+                    issue => issue.Message,
+                    StringComparer.OrdinalIgnoreCase));
+        SelectedDevTools = DevTools.FirstOrDefault(item =>
+                item.SelectionKey == selectedDevToolsKey)
+            ?? DevTools.FirstOrDefault();
 
         if (selectedIdentity is not null)
         {
@@ -2331,9 +2395,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_processResult is not null)
         {
             foreach (CdpTransportInfo transport in _processResult.Cdp.Transports.Where(
-                transport => transport.ProcessId == item.ProcessId))
+                transport => transport.ProcessId == item.ProcessId
+                    && transport.Kind == CdpTransportKind.Tcp))
             {
-                DevToolsItemViewModel devTools = new(transport);
+                DevToolsItemViewModel devTools = new(
+                    transport,
+                    item.ImageName);
                 diagnosticRows.Add(new DiagnosticDetailRow(
                     "DevTools",
                     devTools.Availability,

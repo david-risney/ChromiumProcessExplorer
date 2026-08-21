@@ -279,6 +279,8 @@
                                                           Click="DebugFutureProcess_Click" />
                                                 <MenuItem Header="Process Explorer"
                                                           Click="OpenProcessExplorer_Click" />
+                                                <MenuItem Header="Kill Tree"
+                                                          Click="KillProcessTree_Click" />
                                                 <Separator />
                                                 <MenuItem Header="Relaunch with Template"
                                                           Tag="command-templates" />
@@ -761,41 +763,96 @@
 
             <TabItem Header="DevTools">
                 <Grid Margin="4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="3*" />
                         <ColumnDefinition Width="5" />
                         <ColumnDefinition Width="2*" />
                     </Grid.ColumnDefinitions>
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                        <ItemsControl ItemsSource="{Binding DevToolsNotices}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Margin="5"
-                                               Foreground="#FFA12622"
-                                               Text="{Binding Message}"
-                                               TextWrapping="Wrap" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <DataGrid Grid.Row="1"
-                                  ItemsSource="{Binding DevTools}"
-                                  SelectedItem="{Binding SelectedDevTools}"
-                                  SelectionChanged="DevTools_SelectionChanged">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="PID" Binding="{Binding ProcessId}" />
-                                <DataGridTextColumn Header="Availability" Binding="{Binding Availability}" Width="2*" />
-                                <DataGridTextColumn Header="Transport" Binding="{Binding TransportLabel}" Width="*" />
-                                <DataGridTextColumn Header="Browser" Binding="{Binding Browser}" Width="2*" />
-                                <DataGridTextColumn Header="Restriction or error" Binding="{Binding Error}" Width="3*" />
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </Grid>
-                    <GridSplitter Grid.Column="1" Width="5" Background="#FFE1E5EB" />
-                    <ScrollViewer Grid.Column="2"
+                    <Border Grid.ColumnSpan="3"
+                            Margin="0,0,0,8"
+                            Padding="8"
+                            Background="White"
+                            BorderBrush="#FFD8DDE6"
+                            BorderThickness="1">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Left"
+                                        Orientation="Horizontal">
+                                <Button Click="RefreshDevTools_Click"
+                                        Padding="12,4"
+                                        Content="Refresh">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="IsEnabled" Value="True" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsProcessActivityBusy}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button Margin="6,0,0,0"
+                                        Click="CancelProcessRefresh_Click"
+                                        Padding="12,4"
+                                        Content="Cancel">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="IsEnabled" Value="False" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsRefreshingProcesses}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="True" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <ProgressBar Width="90"
+                                             Height="6"
+                                             Margin="10,0,0,0"
+                                             VerticalAlignment="Center"
+                                             IsIndeterminate="True">
+                                    <ProgressBar.Style>
+                                        <Style TargetType="ProgressBar">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsRefreshingProcesses}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ProgressBar.Style>
+                                </ProgressBar>
+                            </StackPanel>
+                            <TextBlock Margin="12,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="#FF5B6472"
+                                       Text="{Binding Status}" />
+                        </DockPanel>
+                    </Border>
+                    <DataGrid Grid.Row="1"
+                              Grid.Column="0"
+                              ItemsSource="{Binding DevTools}"
+                              SelectedItem="{Binding SelectedDevTools}"
+                              SelectionChanged="DevTools_SelectionChanged">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Process" Binding="{Binding ProcessLabel}" Width="2*" />
+                            <DataGridTextColumn Header="Availability" Binding="{Binding Availability}" Width="2*" />
+                            <DataGridTextColumn Header="Transport" Binding="{Binding TransportLabel}" Width="*" />
+                            <DataGridTextColumn Header="Browser" Binding="{Binding Browser}" Width="2*" />
+                            <DataGridTextColumn Header="Restriction or error" Binding="{Binding Error}" Width="3*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <GridSplitter Grid.Row="1"
+                                  Grid.Column="1"
+                                  Width="5"
+                                  Background="#FFE1E5EB" />
+                    <ScrollViewer Grid.Row="1"
+                                  Grid.Column="2"
                                   Margin="12,0,0,0"
                                   VerticalScrollBarVisibility="Auto">
                         <GroupBox Header="Selected DevTools endpoint" Style="{StaticResource SectionCard}">
@@ -803,6 +860,12 @@
                                           ItemsSource="{Binding SelectedDevTools.Details}" />
                         </GroupBox>
                     </ScrollViewer>
+                    <ItemsControl Grid.Row="2"
+                                  Grid.ColumnSpan="3"
+                                  Margin="0,8,0,0"
+                                  MaxHeight="100"
+                                  ItemTemplate="{StaticResource NoticeTemplate}"
+                                  ItemsSource="{Binding DevToolsNotices}" />
                 </Grid>
             </TabItem>
 

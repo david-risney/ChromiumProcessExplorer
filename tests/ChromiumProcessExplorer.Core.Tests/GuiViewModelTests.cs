@@ -878,12 +878,14 @@ public sealed class GuiViewModelTests
 
         viewModel.DebugProcess(item);
         viewModel.OpenProcessExplorer(item);
+        await viewModel.KillProcessTreeAsync(item);
         await viewModel.DebugFutureLaunchesAsync(item);
 
         Assert.Equal((123, "debugger.exe -p {pid}"), externalTools.Debug);
         Assert.Equal(
             (123, "procexp.exe /s:{pid}"),
             externalTools.ProcessExplorer);
+        Assert.Equal(process.Identity(), externalTools.Terminated);
         Assert.Equal(
             (
                 "sample.exe",
@@ -1051,6 +1053,103 @@ public sealed class GuiViewModelTests
         Assert.Contains(
             "--remote-debugging-port=9222",
             template.AddParts);
+        Assert.Contains(
+            "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
+            template.AddParts);
+    }
+
+    [Fact]
+    public void SettingsUpgradeUnmodifiedRemoteDebuggingTemplate()
+    {
+        string settingsPath = Path.Combine(
+            Path.GetTempPath(),
+            $"cpe-settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(
+                settingsPath,
+                """
+                {
+                  "CommandLineTemplates": [
+                    {
+                      "Id": "remote-debugging",
+                      "Name": "Enable remote debugging",
+                      "ApplicableExecutableRegex": ".*",
+                      "IsFavorite": true,
+                      "AddParts": [ "--remote-debugging-port=9222" ],
+                      "RemoveParts": []
+                    }
+                  ]
+                }
+                """);
+
+            GuiSettingsLoadResult loaded =
+                new JsonGuiSettingsStore(settingsPath).Load();
+            CommandLineTemplateSettings template =
+                Assert.Single(loaded.Settings.CommandLineTemplates);
+
+            Assert.Contains(
+                "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
+                template.AddParts);
+        }
+        finally
+        {
+            File.Delete(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task DevToolsShowsNamedTcpEndpointsAndHidesPrivatePipes()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true);
+        CdpTransportInfo tcp = new(
+            123,
+            CdpTransportKind.Tcp,
+            CdpTransportStatus.Validated,
+            "9222",
+            9222,
+            "command-line",
+            "http://127.0.0.1:9222/json/version",
+            "ws://127.0.0.1:9222/devtools/browser/test",
+            "Chrome/136",
+            "1.3",
+            null,
+            []);
+        CdpTransportInfo pipe = new(
+            123,
+            CdpTransportKind.Pipe,
+            CdpTransportStatus.AlreadyOwned,
+            null,
+            null,
+            "command-line",
+            null,
+            null,
+            null,
+            null,
+            null,
+            []);
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process],
+                    new ProcessGraph([process], []),
+                    cdp: new CdpDiscoveryResult(
+                        SnapshotTime,
+                        [pipe, tcp]))),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        await viewModel.RefreshProcessesAsync();
+
+        DevToolsItemViewModel item = Assert.Single(viewModel.DevTools);
+        Assert.Equal("chrome.exe (123)", item.ProcessLabel);
+        Assert.Equal(CdpTransportKind.Tcp, item.Transport.Kind);
     }
 
     [Fact]
@@ -1362,7 +1461,11 @@ public sealed class GuiViewModelTests
 
         Assert.Equal(@"C:\Chrome\chrome.exe", externalTools.Launch?.Executable);
         Assert.Equal(
-            ["--profile-directory=Test", "--remote-debugging-port=9222"],
+            [
+                "--profile-directory=Test",
+                "--remote-debugging-port=9222",
+                "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
+            ],
             externalTools.Launch?.Arguments);
     }
 
@@ -1494,7 +1597,8 @@ public sealed class GuiViewModelTests
     private static ChromiumDiscoveryResult CreateDiscoveryResult(
         IReadOnlyList<ProcessSnapshotEntry> processes,
         ProcessGraph graph,
-        IReadOnlyList<DiscoveryIssue>? issues = null)
+        IReadOnlyList<DiscoveryIssue>? issues = null,
+        CdpDiscoveryResult? cdp = null)
     {
         return new ChromiumDiscoveryResult(
             SnapshotTime,
@@ -1517,7 +1621,10 @@ public sealed class GuiViewModelTests
                     TimeSpan.Zero),
                 [],
                 []),
-            issues ?? []);
+            issues ?? [])
+        {
+            Cdp = cdp ?? new CdpDiscoveryResult(SnapshotTime, []),
+        };
     }
 
     private static ProcessDetailsResult CreateDetails(
@@ -1715,6 +1822,8 @@ public sealed class GuiViewModelTests
         public (int ProcessId, string Command)? ProcessExplorer
         { get; private set; }
 
+        public ProcessIdentity? Terminated { get; private set; }
+
         public (string Image, string? Package, string Command)? Future
         { get; private set; }
 
@@ -1735,6 +1844,12 @@ public sealed class GuiViewModelTests
             string commandTemplate)
         {
             ProcessExplorer = (processId, commandTemplate);
+        }
+
+        public Task TerminateProcessTreeAsync(ProcessIdentity identity)
+        {
+            Terminated = identity;
+            return Task.CompletedTask;
         }
 
         public void DebugFutureLaunches(
