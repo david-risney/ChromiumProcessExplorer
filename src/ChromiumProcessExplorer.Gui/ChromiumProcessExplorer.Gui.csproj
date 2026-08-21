@@ -11,6 +11,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>ChromiumProcessExplorer</AssemblyName>
+    <ApplicationIcon>Assets\ChromiumProcessExplorer.ico</ApplicationIcon>
+    <AssemblyTitle>Chromium Process Explorer</AssemblyTitle>
+    <Product>Chromium Process Explorer</Product>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\ChromiumProcessExplorer.ico" />
+  </ItemGroup>
 
 </Project>

@@ -1,3 +1,8 @@
+<img src="src/ChromiumProcessExplorer.Gui/Assets/ChromiumProcessExplorer.png"
+     width="96"
+     align="right"
+     alt="Chromium Process Explorer gear icon">
+
 # Chromium Process Explorer
 
 Chromium Process Explorer is a Windows diagnostics tool for native developers who
