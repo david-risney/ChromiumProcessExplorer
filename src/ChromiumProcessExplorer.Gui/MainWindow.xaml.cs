@@ -402,6 +402,27 @@ public partial class MainWindow : Window
         await _viewModel.RefreshProcessesAsync();
     }
 
+    private async void OpenDevTools_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await _viewModel.OpenSelectedDevToolsAsync();
+    }
+
+    private void OpenRemoteDevTools_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _viewModel.OpenSelectedRemoteDevTools();
+    }
+
+    private async void ExtractProcessInternals_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await _viewModel.ExtractProcessInternalsAsync();
+    }
+
     private void OpenDetailTarget_Click(
         object sender,
         RoutedEventArgs e)

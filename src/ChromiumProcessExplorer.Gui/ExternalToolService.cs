@@ -27,6 +27,8 @@ public interface IExternalToolService
     void OpenFileSystemPath(string path);
 
     void OpenRegistryPath(string path);
+
+    void OpenUri(string uri);
 }
 
 public sealed class WindowsExternalToolService : IExternalToolService
@@ -147,6 +149,22 @@ public sealed class WindowsExternalToolService : IExternalToolService
             $"Computer\\{normalized}",
             RegistryValueKind.String);
         Start(new ProcessStartInfo("regedit.exe")
+        {
+            UseShellExecute = true,
+        });
+    }
+
+    public void OpenUri(string uri)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(uri);
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsed)
+            || parsed.Scheme is not ("http" or "https"))
+        {
+            throw new InvalidOperationException(
+                "Only absolute HTTP or HTTPS URLs can be opened.");
+        }
+
+        Start(new ProcessStartInfo(parsed.ToString())
         {
             UseShellExecute = true,
         });

@@ -21,11 +21,27 @@ public interface IGuiDiscoveryService
         IReadOnlyList<string> additionalSearchRoots,
         CancellationToken cancellationToken);
 
+    ValueTask<CdpTargetListResult> DiscoverCdpTargetsAsync(
+        CdpTransportInfo transport,
+        CancellationToken cancellationToken);
+
+    ValueTask OpenDevToolsAsync(
+        CdpTransportInfo transport,
+        string targetId,
+        CancellationToken cancellationToken);
+
+    ValueTask<CdpProcessInternalsResult> DiscoverProcessInternalsAsync(
+        CdpTransportInfo transport,
+        string? imageName,
+        IReadOnlyList<ProcessSnapshotEntry> processes,
+        CancellationToken cancellationToken);
+
 }
 
 public sealed class GuiDiscoveryService : IGuiDiscoveryService
 {
     private readonly ChromiumProcessDiscovery _discovery = new();
+    private readonly CdpBrowserToolsProvider _browserTools = new();
     private readonly string _workerPath;
 
     public GuiDiscoveryService(string workerPath)
@@ -79,5 +95,38 @@ public sealed class GuiDiscoveryService : IGuiDiscoveryService
                 AdditionalSearchRoots = additionalSearchRoots,
             },
             cancellationToken: cancellationToken);
+    }
+
+    public ValueTask<CdpTargetListResult> DiscoverCdpTargetsAsync(
+        CdpTransportInfo transport,
+        CancellationToken cancellationToken)
+    {
+        return _browserTools.DiscoverTargetsAsync(
+            transport,
+            cancellationToken);
+    }
+
+    public ValueTask OpenDevToolsAsync(
+        CdpTransportInfo transport,
+        string targetId,
+        CancellationToken cancellationToken)
+    {
+        return _browserTools.OpenDevToolsAsync(
+            transport,
+            targetId,
+            cancellationToken);
+    }
+
+    public ValueTask<CdpProcessInternalsResult> DiscoverProcessInternalsAsync(
+        CdpTransportInfo transport,
+        string? imageName,
+        IReadOnlyList<ProcessSnapshotEntry> processes,
+        CancellationToken cancellationToken)
+    {
+        return _browserTools.CaptureProcessInternalsAsync(
+            transport,
+            imageName,
+            processes,
+            cancellationToken);
     }
 }

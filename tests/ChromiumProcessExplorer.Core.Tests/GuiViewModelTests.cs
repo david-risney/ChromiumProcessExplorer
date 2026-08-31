@@ -1153,6 +1153,323 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
+    public async Task DevToolsSelectionLoadsTargetsAndOpensChosenFrontend()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true);
+        CdpTransportInfo transport = new(
+            123,
+            CdpTransportKind.Tcp,
+            CdpTransportStatus.Validated,
+            "9222",
+            9222,
+            "command-line",
+            "http://127.0.0.1:9222/json/version",
+            "ws://127.0.0.1:9222/devtools/browser/test",
+            "Chrome/140.0",
+            "1.3",
+            null,
+            []);
+        string? openedTarget = null;
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process],
+                    new ProcessGraph([process], []),
+                    cdp: new CdpDiscoveryResult(
+                        SnapshotTime,
+                        [transport]))),
+            DiscoverCdpTargets = (_, _) => ValueTask.FromResult(
+                new CdpTargetListResult(
+                    SnapshotTime,
+                    [
+                        new CdpInspectableTarget(
+                            "target-1",
+                            "page",
+                            "Example",
+                            "https://example.test/",
+                            "http://127.0.0.1:9222/devtools/inspector.html",
+                            "ws://127.0.0.1:9222/devtools/page/target-1"),
+                    ],
+                    [])),
+            OpenDevTools = (_, targetId, _) =>
+            {
+                openedTarget = targetId;
+                return ValueTask.CompletedTask;
+            },
+        };
+        RecordingExternalToolService externalTools = new();
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            externalTools: externalTools);
+
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.SelectDevToolsAsync(Assert.Single(viewModel.DevTools));
+        await viewModel.OpenSelectedDevToolsAsync();
+        viewModel.OpenSelectedRemoteDevTools();
+
+        Assert.Equal("target-1", openedTarget);
+        Assert.Equal(
+            "http://127.0.0.1:9222/devtools/inspector.html",
+            externalTools.OpenedUri);
+    }
+
+    [Fact]
+    public async Task ProcessInternalsExtractionDisplaysMappedFrames()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "msedge.exe",
+            true);
+        ProcessSnapshotEntry renderer = CreateProcess(
+            456,
+            "msedge.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        CdpTransportInfo transport = new(
+            123,
+            CdpTransportKind.Tcp,
+            CdpTransportStatus.Validated,
+            "9222",
+            9222,
+            "command-line",
+            "http://127.0.0.1:9222/json/version",
+            "ws://127.0.0.1:9222/devtools/browser/test",
+            "Edg/140.0",
+            "1.3",
+            null,
+            []);
+        int fingerprintReconciliations = 0;
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process, renderer],
+                    new ProcessGraph(
+                        [process, renderer],
+                        [CreateEdge(
+                            process,
+                            renderer,
+                            ProcessRelationshipType.ChromiumSubprocess)]),
+                    cdp: new CdpDiscoveryResult(
+                        SnapshotTime,
+                        [transport]))),
+            DiscoverProcessInternals = (_, imageName, _, _) =>
+            {
+                Assert.Equal("msedge.exe", imageName);
+                return ValueTask.FromResult(
+                    new CdpProcessInternalsResult(
+                        SnapshotTime,
+                        123,
+                        "edge://process-internals/",
+                        [
+                            new CdpProcessInternalsFrame(
+                                "Example",
+                                0,
+                                7,
+                                12,
+                                3,
+                                renderer.Identity(),
+                                "Active",
+                                "https://example.test/",
+                                4,
+                                5,
+                                6,
+                                "https://example.test/",
+                                null),
+                            new CdpProcessInternalsFrame(
+                                "Example subframe",
+                                1,
+                                7,
+                                13,
+                                3,
+                                renderer.Identity(),
+                                "Active",
+                                "https://example.test/path",
+                                4,
+                                5,
+                                6,
+                                "https://example.test/path",
+                                null),
+                            new CdpProcessInternalsFrame(
+                                "Accounts",
+                                1,
+                                7,
+                                14,
+                                4,
+                                renderer.Identity(),
+                                "Active",
+                                "https://accounts.example.test/sign-in",
+                                4,
+                                5,
+                                6,
+                                "https://accounts.example.test/",
+                                null),
+                            new CdpProcessInternalsFrame(
+                                "Reused PID",
+                                0,
+                                8,
+                                15,
+                                5,
+                                new ProcessIdentity(
+                                    renderer.ProcessId,
+                                    renderer.CreationTime?.AddSeconds(-1)),
+                                "Active",
+                                "https://wrong-generation.test/",
+                                4,
+                                5,
+                                6,
+                                "https://wrong-generation.test/",
+                                null),
+                        ],
+                        []));
+            },
+            EnumerateMojoPipes = _ =>
+            {
+                fingerprintReconciliations++;
+                return ValueTask.FromResult(
+                    new MojoPipeEnumerationResult([], []));
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        await viewModel.RefreshProcessesAsync();
+        ProcessTreeItemViewModel rendererItem = Assert.Single(
+            FlattenTree(viewModel.ProcessRoots),
+            item => item.Identity == renderer.Identity());
+        await viewModel.SelectDevToolsAsync(Assert.Single(viewModel.DevTools));
+        await viewModel.SelectProcessAsync(rendererItem);
+        await viewModel.ExtractProcessInternalsAsync();
+
+        ProcessInternalsFrameViewModel frame =
+            viewModel.ProcessInternalsFrames[0];
+        Assert.Equal("456 (internal 7)", frame.Process);
+        Assert.Equal(
+            ["https://accounts.example.test", "https://example.test"],
+            rendererItem.Origins);
+        Assert.DoesNotContain(
+            "wrong-generation",
+            rendererItem.OriginSummary,
+            StringComparison.Ordinal);
+        Assert.Equal(2, viewModel.ProcessInspector?.Origins.Count);
+        Assert.Contains(
+            viewModel.ProcessInspector!.Origins,
+            row => row.Label == "Main-frame origin"
+                && row.Value == "https://example.test");
+        Assert.Contains(
+            viewModel.ProcessInspector.Origins,
+            row => row.Label == "Subframe origin"
+                && row.Value == "https://accounts.example.test");
+        Assert.Contains(
+            "without opening a visible tab",
+            viewModel.DevToolsActionStatus,
+            StringComparison.Ordinal);
+        Assert.True(fingerprintReconciliations > 0);
+
+        viewModel.ProcessFilter = "origin:accounts.example.test";
+        Assert.Single(
+            FlattenTree(viewModel.FilteredProcessRoots),
+            item => item.Identity == renderer.Identity());
+        viewModel.ProcessFilter = string.Empty;
+
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.SelectDevToolsAsync(Assert.Single(viewModel.DevTools));
+
+        Assert.Equal(4, viewModel.ProcessInternalsFrames.Count);
+        Assert.Equal(
+            2,
+            Assert.Single(
+                FlattenTree(viewModel.ProcessRoots),
+                item => item.Identity == renderer.Identity()).Origins.Count);
+        Assert.Contains(
+            "without opening a visible tab",
+            viewModel.DevToolsActionStatus,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProcessInternalsTransientPipesDoNotTriggerAutoRefresh()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true);
+        CdpTransportInfo transport = new(
+            123,
+            CdpTransportKind.Tcp,
+            CdpTransportStatus.Validated,
+            "9222",
+            9222,
+            "command-line",
+            "http://127.0.0.1:9222/json/version",
+            "ws://127.0.0.1:9222/devtools/browser/test",
+            "Chrome/140.0",
+            "1.3",
+            null,
+            []);
+        int processRefreshes = 0;
+        int pipeEnumerations = 0;
+        TaskCompletionSource<CdpProcessInternalsResult> extraction =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ =>
+            {
+                processRefreshes++;
+                return ValueTask.FromResult(
+                    CreateDiscoveryResult(
+                        [process],
+                        new ProcessGraph([process], []),
+                        cdp: new CdpDiscoveryResult(
+                            SnapshotTime,
+                            [transport])));
+            },
+            DiscoverProcessInternals = (_, _, _, _) =>
+                new ValueTask<CdpProcessInternalsResult>(extraction.Task),
+            EnumerateMojoPipes = _ =>
+            {
+                pipeEnumerations++;
+                return ValueTask.FromResult(
+                    new MojoPipeEnumerationResult(
+                        pipeEnumerations == 1
+                            ? [new MojoPipeCandidate("temporary.hidden", 456)]
+                            : [],
+                        []));
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            TimeSpan.FromMilliseconds(10));
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.SelectDevToolsAsync(Assert.Single(viewModel.DevTools));
+
+        Task extractionTask = viewModel.ExtractProcessInternalsAsync();
+        viewModel.StartAutoRefresh();
+        await Task.Delay(50);
+        extraction.SetResult(new CdpProcessInternalsResult(
+            SnapshotTime,
+            123,
+            "chrome://process-internals/",
+            [],
+            []));
+        await extractionTask;
+        await Task.Delay(100);
+        viewModel.StopAutoRefresh();
+
+        Assert.Equal(1, processRefreshes);
+        Assert.True(pipeEnumerations >= 2);
+    }
+
+    [Fact]
     public void UnfavoriteTemplateIsExcludedOnlyFromContextMenus()
     {
         ProcessSnapshotEntry process = CreateProcess(
@@ -1842,6 +2159,8 @@ public sealed class GuiViewModelTests
 
         public string? OpenedRegistryPath { get; private set; }
 
+        public string? OpenedUri { get; private set; }
+
         public void DebugProcess(int processId, string commandTemplate)
         {
             Debug = (processId, commandTemplate);
@@ -1883,6 +2202,11 @@ public sealed class GuiViewModelTests
         public void OpenRegistryPath(string path)
         {
             OpenedRegistryPath = path;
+        }
+
+        public void OpenUri(string uri)
+        {
+            OpenedUri = uri;
         }
     }
 
@@ -1929,6 +2253,33 @@ public sealed class GuiViewModelTests
                     TimeSpan.Zero),
                 []));
 
+        public Func<CdpTransportInfo, CancellationToken, ValueTask<CdpTargetListResult>>
+            DiscoverCdpTargets
+        { get; init; } =
+            (_, _) => ValueTask.FromResult(
+                new CdpTargetListResult(SnapshotTime, [], []));
+
+        public Func<CdpTransportInfo, string, CancellationToken, ValueTask>
+            OpenDevTools
+        { get; init; } =
+            (_, _, _) => ValueTask.CompletedTask;
+
+        public Func<
+            CdpTransportInfo,
+            string?,
+            IReadOnlyList<ProcessSnapshotEntry>,
+            CancellationToken,
+            ValueTask<CdpProcessInternalsResult>>
+            DiscoverProcessInternals
+        { get; init; } =
+            (transport, _, _, _) => ValueTask.FromResult(
+                new CdpProcessInternalsResult(
+                    SnapshotTime,
+                    transport.ProcessId,
+                    "chrome://process-internals/",
+                    [],
+                    []));
+
         public IReadOnlyList<string> LastAdditionalInstallationFolders
         { get; private set; } = [];
 
@@ -1971,6 +2322,35 @@ public sealed class GuiViewModelTests
         {
             LastAdditionalInstallationFolders = additionalSearchRoots;
             return DiscoverInstallations(cancellationToken);
+        }
+
+        public ValueTask<CdpTargetListResult> DiscoverCdpTargetsAsync(
+            CdpTransportInfo transport,
+            CancellationToken cancellationToken)
+        {
+            return DiscoverCdpTargets(transport, cancellationToken);
+        }
+
+        public ValueTask OpenDevToolsAsync(
+            CdpTransportInfo transport,
+            string targetId,
+            CancellationToken cancellationToken)
+        {
+            return OpenDevTools(transport, targetId, cancellationToken);
+        }
+
+        public ValueTask<CdpProcessInternalsResult>
+            DiscoverProcessInternalsAsync(
+                CdpTransportInfo transport,
+                string? imageName,
+                IReadOnlyList<ProcessSnapshotEntry> processes,
+                CancellationToken cancellationToken)
+        {
+            return DiscoverProcessInternals(
+                transport,
+                imageName,
+                processes,
+                cancellationToken);
         }
     }
 }

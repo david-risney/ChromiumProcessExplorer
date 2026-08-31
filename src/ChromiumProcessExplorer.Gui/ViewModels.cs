@@ -15,6 +15,7 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
     private bool _isExpanded;
     private bool _isSelected;
     private bool _isStale;
+    private string[] _origins = [];
 
     public ProcessTreeItemViewModel(
         string branchKey,
@@ -80,6 +81,22 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
 
     public string StateLabel => IsStale ? "Exited" : string.Empty;
 
+    public IReadOnlyList<string> Origins => _origins;
+
+    public bool HasOrigins => _origins.Length > 0;
+
+    public string OriginSummary => _origins.Length switch
+    {
+        0 => string.Empty,
+        1 => _origins[0],
+        2 => string.Join(", ", _origins),
+        _ => $"{string.Join(", ", _origins.Take(2))} +{_origins.Length - 2}",
+    };
+
+    public string OriginToolTip => string.Join(
+        Environment.NewLine,
+        _origins);
+
     public ImageSource? Icon
     {
         get => _icon;
@@ -100,6 +117,25 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
         set => SetField(ref _isSelected, value);
     }
 
+    public void SetOrigins(IEnumerable<string> origins)
+    {
+        string[] values = origins
+            .Where(origin => !string.IsNullOrWhiteSpace(origin))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (_origins.SequenceEqual(values, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _origins = values;
+        OnPropertyChanged(nameof(Origins));
+        OnPropertyChanged(nameof(HasOrigins));
+        OnPropertyChanged(nameof(OriginSummary));
+        OnPropertyChanged(nameof(OriginToolTip));
+    }
+
     public ProcessTreeItemViewModel CloneForRetention(
         IReadOnlySet<ProcessIdentity> currentIdentities)
     {
@@ -115,6 +151,7 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
             IsExpanded = IsExpanded,
             IsSelected = IsSelected,
         };
+        clone.SetOrigins(Origins);
         return clone;
     }
 }
@@ -195,6 +232,10 @@ public sealed class ProcessInspectorViewModel
     public required bool PackageIdentityKnown { get; init; }
 
     public required IReadOnlyList<PropertyRow> Summary { get; init; }
+
+    public required IReadOnlyList<PropertyRow> Origins { get; init; }
+
+    public bool HasOrigins => Origins.Count > 0;
 
     public required IReadOnlyList<RelationshipDetailRow> Relationships { get; init; }
 
@@ -289,10 +330,12 @@ public sealed class DevToolsItemViewModel
 {
     public DevToolsItemViewModel(
         CdpTransportInfo transport,
-        string? imageName)
+        string? imageName,
+        DateTimeOffset? processCreationTime = null)
     {
         Transport = transport;
         ImageName = imageName;
+        ProcessCreationTime = processCreationTime;
     }
 
     public CdpTransportInfo Transport { get; }
@@ -301,12 +344,15 @@ public sealed class DevToolsItemViewModel
 
     public string? ImageName { get; }
 
+    public DateTimeOffset? ProcessCreationTime { get; }
+
     public string ProcessLabel =>
         $"{ImageName ?? "process"} ({ProcessId})";
 
     public string SelectionKey =>
         $"{ProcessId}|{Transport.Kind}|{Transport.Port}|"
-        + $"{Transport.ConfiguredValue}";
+        + $"{Transport.ConfiguredValue}|{ProcessCreationTime:O}|"
+        + $"{Transport.WebSocketDebuggerUrl}";
 
     public string Availability => Transport.Status switch
     {
@@ -327,6 +373,11 @@ public sealed class DevToolsItemViewModel
 
     public string? Error => Transport.Error ?? Transport.Restriction;
 
+    public string InternalPageScheme =>
+        CdpBrowserToolsProvider.ResolveInternalPageScheme(
+            Transport.Browser,
+            ImageName);
+
     public IReadOnlyList<PropertyRow> Details =>
     [
         new("Process ID", ProcessId.ToString(
@@ -335,6 +386,7 @@ public sealed class DevToolsItemViewModel
         new("Transport", TransportLabel),
         new("Browser", Transport.Browser),
         new("Protocol", Transport.ProtocolVersion),
+        new("Internal page scheme", $"{InternalPageScheme}://"),
         new("Version endpoint", Transport.VersionEndpoint),
         new("WebSocket endpoint", Transport.WebSocketDebuggerUrl),
         new("Controller", Transport.ControllerProcessId is int controller
@@ -343,6 +395,59 @@ public sealed class DevToolsItemViewModel
         new("Restriction", Transport.Restriction),
         new("Error", Transport.Error),
     ];
+}
+
+public sealed class DevToolsTargetViewModel
+{
+    public DevToolsTargetViewModel(CdpInspectableTarget target)
+    {
+        Target = target;
+    }
+
+    public CdpInspectableTarget Target { get; }
+
+    public string TargetId => Target.TargetId;
+
+    public string Type => Target.Type;
+
+    public string Title => string.IsNullOrWhiteSpace(Target.Title)
+        ? "(untitled)"
+        : Target.Title;
+
+    public string Url => Target.Url;
+
+    public string? DevToolsFrontendUrl => Target.DevToolsFrontendUrl;
+
+    public bool CanOpenDevTools =>
+        Type is "page" or "tab";
+
+    public bool CanOpenRemoteDevTools =>
+        !string.IsNullOrWhiteSpace(DevToolsFrontendUrl);
+}
+
+public sealed class ProcessInternalsFrameViewModel
+{
+    public ProcessInternalsFrameViewModel(CdpProcessInternalsFrame frame)
+    {
+        Frame = frame;
+    }
+
+    public CdpProcessInternalsFrame Frame { get; }
+
+    public string Page => Frame.WebContentsTitle;
+
+    public int Depth => Frame.Depth;
+
+    public string Process => Frame.Process is ProcessIdentity process
+        ? $"{process.ProcessId} (internal {Frame.InternalProcessId})"
+        : $"internal {Frame.InternalProcessId}";
+
+    public string Lifecycle => Frame.Lifecycle;
+
+    public string? Url => Frame.Url;
+
+    public string SiteInstance =>
+        $"{Frame.SiteInstanceId} / group {Frame.SiteInstanceGroupId}";
 }
 
 public sealed class MainViewModel : ObservableObject, IDisposable
@@ -356,6 +461,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ChromiumProcessExplorer.Core.ProductVersion.Version;
     private readonly Dictionary<ProcessIdentity, ProcessInspectorViewModel>
         _inspectorCache = [];
+    private readonly Dictionary<string, ProcessInternalsCacheEntry>
+        _processInternalsCache = new(StringComparer.Ordinal);
     private readonly HashSet<string> _dismissedProcessNotices =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dismissedInstallationNotices =
@@ -368,6 +475,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _selectionCancellation;
     private CancellationTokenSource? _installationFilterCancellation;
     private CancellationTokenSource? _commandLineSuggestionCancellation;
+    private CancellationTokenSource? _devToolsCancellation;
     private CancellationTokenSource? _autoRefreshCancellation;
     private Task? _autoRefreshTask;
     private Task? _installationFilterTask;
@@ -379,6 +487,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private ProcessInspectorViewModel? _processInspector;
     private InstallationItemViewModel? _selectedInstallation;
     private DevToolsItemViewModel? _selectedDevTools;
+    private DevToolsTargetViewModel? _selectedDevToolsTarget;
     private CommandLineTemplateViewModel? _selectedCommandLineTemplate;
     private string _processFilter = string.Empty;
     private string _installationFilter = string.Empty;
@@ -402,6 +511,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isCommandLineSuggestionVisible;
     private string _commandLineRunFilter = string.Empty;
     private CommandLineRunTargetViewModel? _selectedCommandLineRunTarget;
+    private bool _isLoadingDevToolsTargets;
+    private bool _isExtractingProcessInternals;
+    private string _devToolsActionStatus = "Select a validated endpoint.";
 
     public MainViewModel(
         IGuiDiscoveryService discovery,
@@ -457,6 +569,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     { get; } = [];
 
     public ObservableCollection<DevToolsItemViewModel> DevTools { get; } = [];
+
+    public ObservableCollection<DevToolsTargetViewModel> DevToolsTargets { get; } = [];
+
+    public ObservableCollection<ProcessInternalsFrameViewModel>
+        ProcessInternalsFrames
+    { get; } = [];
 
     public ObservableCollection<ContextIssueViewModel> ProcessNotices { get; } = [];
 
@@ -514,8 +632,71 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public DevToolsItemViewModel? SelectedDevTools
     {
         get => _selectedDevTools;
-        set => SetField(ref _selectedDevTools, value);
+        set
+        {
+            if (SetField(ref _selectedDevTools, value))
+            {
+                OnPropertyChanged(nameof(CanExtractProcessInternals));
+            }
+        }
     }
+
+    public DevToolsTargetViewModel? SelectedDevToolsTarget
+    {
+        get => _selectedDevToolsTarget;
+        set
+        {
+            if (SetField(ref _selectedDevToolsTarget, value))
+            {
+                OnPropertyChanged(nameof(CanOpenDevTools));
+                OnPropertyChanged(nameof(CanOpenRemoteDevTools));
+            }
+        }
+    }
+
+    public bool IsLoadingDevToolsTargets
+    {
+        get => _isLoadingDevToolsTargets;
+        private set
+        {
+            if (SetField(ref _isLoadingDevToolsTargets, value))
+            {
+                OnPropertyChanged(nameof(CanOpenDevTools));
+                OnPropertyChanged(nameof(CanOpenRemoteDevTools));
+            }
+        }
+    }
+
+    public bool IsExtractingProcessInternals
+    {
+        get => _isExtractingProcessInternals;
+        private set
+        {
+            if (SetField(ref _isExtractingProcessInternals, value))
+            {
+                OnPropertyChanged(nameof(CanExtractProcessInternals));
+                OnPropertyChanged(nameof(IsProcessActivityBusy));
+            }
+        }
+    }
+
+    public string DevToolsActionStatus
+    {
+        get => _devToolsActionStatus;
+        private set => SetField(ref _devToolsActionStatus, value);
+    }
+
+    public bool CanOpenDevTools =>
+        !IsLoadingDevToolsTargets
+        && SelectedDevToolsTarget?.CanOpenDevTools == true;
+
+    public bool CanOpenRemoteDevTools =>
+        !IsLoadingDevToolsTargets
+        && SelectedDevToolsTarget?.CanOpenRemoteDevTools == true;
+
+    public bool CanExtractProcessInternals =>
+        !IsExtractingProcessInternals
+        && SelectedDevTools?.Transport.Status == CdpTransportStatus.Validated;
 
     public CommandLineTemplateViewModel? SelectedCommandLineTemplate
     {
@@ -646,7 +827,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     public bool IsProcessActivityBusy =>
-        IsRefreshingProcesses || IsLoadingSelection;
+        IsRefreshingProcesses
+        || IsLoadingSelection
+        || IsExtractingProcessInternals;
 
     public bool AutoRefreshProcesses
     {
@@ -1025,10 +1208,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public async Task SelectDevToolsAsync(DevToolsItemViewModel? item)
     {
+        _devToolsCancellation?.Cancel();
+        _devToolsCancellation?.Dispose();
+        _devToolsCancellation = null;
+        IsLoadingDevToolsTargets = false;
+        IsExtractingProcessInternals = false;
         SelectedDevTools = item;
+        SelectedDevToolsTarget = null;
+        DevToolsTargets.Clear();
         if (item is null)
         {
+            ProcessInternalsFrames.Clear();
+            DevToolsActionStatus = "Select a validated endpoint.";
             return;
+        }
+
+        bool hasCachedInternals = _processInternalsCache.TryGetValue(
+            item.SelectionKey,
+            out ProcessInternalsCacheEntry? cachedInternals);
+        if (hasCachedInternals)
+        {
+            Replace(ProcessInternalsFrames, cachedInternals!.Frames);
+            DevToolsActionStatus = cachedInternals.Status;
+        }
+        else
+        {
+            ProcessInternalsFrames.Clear();
         }
 
         ProcessTreeItemViewModel? process = Flatten(ProcessRoots)
@@ -1038,6 +1243,187 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (process is not null)
         {
             await SelectProcessAsync(process);
+        }
+
+        if (item.Transport.Status != CdpTransportStatus.Validated)
+        {
+            DevToolsActionStatus =
+                "The selected endpoint is not available for interactive tools.";
+            return;
+        }
+
+        CancellationTokenSource cancellation = new();
+        _devToolsCancellation = cancellation;
+        IsLoadingDevToolsTargets = true;
+        if (!hasCachedInternals)
+        {
+            DevToolsActionStatus = "Loading inspectable targets...";
+        }
+        try
+        {
+            CdpTargetListResult result =
+                await _discovery.DiscoverCdpTargetsAsync(
+                    item.Transport,
+                    cancellation.Token);
+            if (!ReferenceEquals(_devToolsCancellation, cancellation))
+            {
+                return;
+            }
+
+            Replace(
+                DevToolsTargets,
+                result.Targets
+                    .Select(target => new DevToolsTargetViewModel(target))
+                    .OrderBy(target => target.Type)
+                    .ThenBy(target => target.Title));
+            SelectedDevToolsTarget = DevToolsTargets.FirstOrDefault(
+                target => target.Type is "page" or "tab")
+                ?? DevToolsTargets.FirstOrDefault();
+            AddDevToolsIssues(result.Issues);
+            if (!hasCachedInternals)
+            {
+                DevToolsActionStatus = DevToolsTargets.Count == 0
+                    ? "No inspectable targets were advertised."
+                    : $"Loaded {DevToolsTargets.Count} inspectable targets.";
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            AddDevToolsIssue("cdp-target-list", exception.Message);
+            DevToolsActionStatus =
+                $"Unable to load targets: {exception.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_devToolsCancellation, cancellation))
+            {
+                IsLoadingDevToolsTargets = false;
+                cancellation.Dispose();
+                _devToolsCancellation = null;
+            }
+        }
+    }
+
+    public async Task OpenSelectedDevToolsAsync()
+    {
+        DevToolsItemViewModel? endpoint = SelectedDevTools;
+        DevToolsTargetViewModel? target = SelectedDevToolsTarget;
+        if (endpoint is null || target?.CanOpenDevTools != true)
+        {
+            return;
+        }
+
+        try
+        {
+            await _discovery.OpenDevToolsAsync(
+                endpoint.Transport,
+                target.TargetId,
+                CancellationToken.None);
+            DevToolsActionStatus =
+                $"Opened DevTools for {target.Title}.";
+        }
+        catch (Exception exception)
+        {
+            AddDevToolsIssue("cdp-open-devtools", exception.Message);
+            DevToolsActionStatus =
+                $"Unable to open DevTools: {exception.Message}";
+        }
+    }
+
+    public void OpenSelectedRemoteDevTools()
+    {
+        DevToolsTargetViewModel? target = SelectedDevToolsTarget;
+        if (target?.DevToolsFrontendUrl is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _externalTools.OpenUri(target.DevToolsFrontendUrl);
+            DevToolsActionStatus =
+                $"Opened remote DevTools for {target.Title}.";
+        }
+        catch (Exception exception)
+        {
+            AddDevToolsIssue("cdp-open-remote-devtools", exception.Message);
+            DevToolsActionStatus =
+                $"Unable to open remote DevTools: {exception.Message}";
+        }
+    }
+
+    public async Task ExtractProcessInternalsAsync()
+    {
+        DevToolsItemViewModel? endpoint = SelectedDevTools;
+        IReadOnlyList<ProcessSnapshotEntry>? processes =
+            _processResult?.Processes;
+        if (endpoint is null
+            || endpoint.Transport.Status != CdpTransportStatus.Validated
+            || processes is null)
+        {
+            return;
+        }
+
+        _devToolsCancellation?.Cancel();
+        _devToolsCancellation?.Dispose();
+        IsLoadingDevToolsTargets = false;
+        CancellationTokenSource cancellation = new();
+        _devToolsCancellation = cancellation;
+        IsExtractingProcessInternals = true;
+        ProcessInternalsFrames.Clear();
+        string? originalMojoFingerprint = _mojoPipeFingerprint;
+        DevToolsActionStatus =
+            $"Reading {endpoint.InternalPageScheme}://process-internals "
+                + "through a hidden target...";
+        try
+        {
+            CdpProcessInternalsResult result =
+                await _discovery.DiscoverProcessInternalsAsync(
+                    endpoint.Transport,
+                    endpoint.ImageName,
+                    processes,
+                    cancellation.Token);
+            if (!ReferenceEquals(_devToolsCancellation, cancellation))
+            {
+                return;
+            }
+
+            ProcessInternalsFrameViewModel[] frames = result.Frames
+                .Select(frame => new ProcessInternalsFrameViewModel(frame))
+                .ToArray();
+            Replace(ProcessInternalsFrames, frames);
+            AddDevToolsIssues(result.Issues);
+            DevToolsActionStatus = result.Frames.Count == 0
+                ? $"No frame data was returned by {result.InternalPageUrl}."
+                : $"Extracted {result.Frames.Count} frames from "
+                    + $"{result.InternalPageUrl} without opening a visible tab.";
+            _processInternalsCache[endpoint.SelectionKey] =
+                new ProcessInternalsCacheEntry(
+                    frames,
+                    DevToolsActionStatus);
+            ApplyCachedRendererOrigins();
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            AddDevToolsIssue("cdp-process-internals", exception.Message);
+            DevToolsActionStatus =
+                $"Unable to extract process internals: {exception.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_devToolsCancellation, cancellation))
+            {
+                await RestoreMojoFingerprintAsync(originalMojoFingerprint);
+                IsExtractingProcessInternals = false;
+                cancellation.Dispose();
+                _devToolsCancellation = null;
+            }
         }
     }
 
@@ -1060,12 +1446,41 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _commandLineSuggestionCancellation?.Cancel();
         _commandLineSuggestionCancellation?.Dispose();
         _commandLineSuggestionCancellation = null;
+        _devToolsCancellation?.Cancel();
+        _devToolsCancellation?.Dispose();
+        _devToolsCancellation = null;
         GC.SuppressFinalize(this);
     }
 
     public void CancelProcessRefresh()
     {
         _processRefreshCancellation?.Cancel();
+        _devToolsCancellation?.Cancel();
+        IsLoadingDevToolsTargets = false;
+        IsExtractingProcessInternals = false;
+    }
+
+    private void AddDevToolsIssues(IEnumerable<DiscoveryIssue> issues)
+    {
+        foreach (DiscoveryIssue issue in issues)
+        {
+            AddDevToolsIssue(issue.Stage, issue.Message);
+        }
+    }
+
+    private void AddDevToolsIssue(string source, string message)
+    {
+        if (_dismissedDevToolsNotices.Contains(message)
+            || DevToolsNotices.Any(notice =>
+                string.Equals(
+                    notice.Message,
+                    message,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        DevToolsNotices.Add(new ContextIssueViewModel(source, message));
     }
 
     public void CancelInstallationScan()
@@ -1963,7 +2378,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _diagnosticsResult = null;
         _diagnosticsTask = null;
         await PopulateIconsAsync(ProcessRoots, cancellationToken);
-        UpdateFilteredProcessRoots();
         UpdateCommandLineRunTargets();
 
         IReadOnlyList<DiscoveryIssue> issues =
@@ -1983,11 +2397,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             DevTools,
             result.Cdp.Transports
                 .Where(transport => transport.Kind == CdpTransportKind.Tcp)
-                .Select(transport => new DevToolsItemViewModel(
-                    transport,
-                    result.Processes.FirstOrDefault(process =>
-                        process.ProcessId == transport.ProcessId)?.ImageName))
+                .Select(transport =>
+                {
+                    ProcessSnapshotEntry? process =
+                        result.Processes.FirstOrDefault(candidate =>
+                            candidate.ProcessId == transport.ProcessId);
+                    return new DevToolsItemViewModel(
+                        transport,
+                        process?.ImageName,
+                        process?.CreationTime);
+                })
                 .OrderBy(item => item.ProcessId));
+        HashSet<string> currentDevToolsKeys = DevTools
+            .Select(item => item.SelectionKey)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (string staleKey in _processInternalsCache.Keys
+            .Where(key => !currentDevToolsKeys.Contains(key))
+            .ToArray())
+        {
+            _processInternalsCache.Remove(staleKey);
+        }
+        ApplyCachedRendererOrigins(updateFilter: false);
+        UpdateFilteredProcessRoots();
         Replace(
             DevToolsNotices,
             result.Cdp.Issues
@@ -2026,6 +2457,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     cached);
             }
         }
+        RefreshSelectedProcessOrigins();
 
         ProcessTreeItemViewModel CreateTreeItem(ProcessPresentationBranch branch)
         {
@@ -2081,6 +2513,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     : row)
                 .ToArray(),
             Relationships = source.Relationships,
+            Origins = source.Origins,
             Runtime = source.Runtime,
             Executable = source.Executable,
             Switches = source.Switches,
@@ -2129,13 +2562,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 ("path", item.ExecutablePath),
                 ("executable", item.ExecutablePath),
                 ("command", item.CommandLine),
+                ("origin", item.OriginSummary),
                 ("status", item.StateLabel));
             if (!matches && children.Length == 0)
             {
                 return null;
             }
 
-            return new ProcessTreeItemViewModel(
+            ProcessTreeItemViewModel filtered = new(
                 item.BranchKey,
                 item.Descriptor,
                 item.IsReference,
@@ -2146,6 +2580,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 IsExpanded = filter.Length > 0 && children.Length > 0,
                 IsSelected = item.Identity == selectedIdentity,
             };
+            filtered.SetOrigins(item.Origins);
+            return filtered;
         }
 
         AreAllProcessNodesExpanded =
@@ -2310,6 +2746,163 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private async Task RestoreMojoFingerprintAsync(
+        string? expectedFingerprint)
+    {
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(2));
+        try
+        {
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                MojoPipeEnumerationResult result =
+                    await _discovery.EnumerateMojoPipesAsync(timeout.Token);
+                string fingerprint = CreateMojoFingerprint(
+                    result.Pipes.Select(pipe => pipe.Name));
+                if (expectedFingerprint is null
+                    || string.Equals(
+                        fingerprint,
+                        expectedFingerprint,
+                        StringComparison.Ordinal))
+                {
+                    _mojoPipeFingerprint = fingerprint;
+                    return;
+                }
+
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(250),
+                    timeout.Token);
+            }
+        }
+
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            AddDevToolsIssue(
+                "cdp-process-internals-refresh",
+                "Unable to reconcile process auto-refresh after the hidden "
+                    + $"diagnostic target closed: {exception.Message}");
+        }
+    }
+
+    private void ApplyCachedRendererOrigins(bool updateFilter = true)
+    {
+        Dictionary<ProcessIdentity, string[]> originsByProcess =
+            _processInternalsCache.Values
+                .SelectMany(entry => entry.Frames)
+                .Where(frame => frame.Frame.Process is not null)
+                .Select(frame => (
+                    Process: frame.Frame.Process!.Value,
+                    Origin: GetOrigin(frame.Frame.SiteUrl)
+                        ?? GetOrigin(frame.Frame.Url)))
+                .Where(item => item.Origin is not null)
+                .GroupBy(item => item.Process)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group
+                        .Select(item => item.Origin!)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Order(StringComparer.OrdinalIgnoreCase)
+                        .ToArray());
+        foreach (ProcessTreeItemViewModel process in Flatten(ProcessRoots))
+        {
+            process.SetOrigins(
+                originsByProcess.GetValueOrDefault(process.Identity) ?? []);
+        }
+
+        if (updateFilter)
+        {
+            UpdateFilteredProcessRoots();
+        }
+
+        RefreshSelectedProcessOrigins();
+    }
+
+    private PropertyRow[] BuildOriginRows(
+        ProcessIdentity identity)
+    {
+        return _processInternalsCache.Values
+            .SelectMany(entry => entry.Frames)
+            .Where(frame => frame.Frame.Process == identity)
+            .Select(frame => (
+                Frame: frame.Frame,
+                Origin: GetOrigin(frame.Frame.SiteUrl)
+                    ?? GetOrigin(frame.Frame.Url)))
+            .Where(item => item.Origin is not null)
+            .GroupBy(
+                item => item.Origin!,
+                StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new PropertyRow(
+                group.Any(item => item.Frame.Depth == 0)
+                    ? "Main-frame origin"
+                    : "Subframe origin",
+                group.Key))
+            .ToArray();
+    }
+
+    private void RefreshSelectedProcessOrigins()
+    {
+        if (ProcessInspector is null)
+        {
+            return;
+        }
+
+        ProcessInspectorViewModel source = ProcessInspector;
+        ProcessInspector = new ProcessInspectorViewModel
+        {
+            Identity = source.Identity,
+            ImageName = source.ImageName,
+            Platform = source.Platform,
+            Role = source.Role,
+            IsStale = source.IsStale,
+            IsLoadingDiagnostics = source.IsLoadingDiagnostics,
+            Icon = source.Icon,
+            CommandLine = source.CommandLine,
+            PackageFullName = source.PackageFullName,
+            PackageIdentityKnown = source.PackageIdentityKnown,
+            Summary = source.Summary,
+            Origins = BuildOriginRows(source.Identity),
+            Relationships = source.Relationships,
+            Runtime = source.Runtime,
+            Executable = source.Executable,
+            Switches = source.Switches,
+            Paths = source.Paths,
+            Diagnostics = source.Diagnostics,
+            Evidence = source.Evidence,
+            Issues = source.Issues,
+        };
+        _inspectorCache[source.Identity] = ProcessInspector;
+    }
+
+    private static string? GetOrigin(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (value.StartsWith("blob:", StringComparison.OrdinalIgnoreCase))
+        {
+            return GetOrigin(value["blob:".Length..]);
+        }
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? uri))
+        {
+            return null;
+        }
+
+        if (uri.IsFile)
+        {
+            return "file://";
+        }
+
+        return string.IsNullOrWhiteSpace(uri.Host)
+            ? null
+            : uri.GetLeftPart(UriPartial.Authority);
+    }
+
     private static string CreateMojoFingerprint(IEnumerable<string> names)
     {
         return string.Join(
@@ -2407,7 +3000,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             {
                 DevToolsItemViewModel devTools = new(
                     transport,
-                    item.ImageName);
+                    item.ImageName,
+                    item.Identity.CreationTime);
                 diagnosticRows.Add(new DiagnosticDetailRow(
                     "DevTools",
                     devTools.Availability,
@@ -2495,6 +3089,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 new("Parent PID", snapshot.ParentProcessId.ToString(
                     System.Globalization.CultureInfo.InvariantCulture)),
             ],
+            Origins = BuildOriginRows(item.Identity),
             Relationships = relationships,
             Runtime = runtime,
             Executable =
@@ -2854,6 +3449,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             collection.Add(item);
         }
     }
+
+    private sealed record ProcessInternalsCacheEntry(
+        IReadOnlyList<ProcessInternalsFrameViewModel> Frames,
+        string Status);
 
     private enum RefreshTarget
     {

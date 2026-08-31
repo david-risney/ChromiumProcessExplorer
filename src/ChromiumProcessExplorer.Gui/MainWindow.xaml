@@ -308,18 +308,26 @@
                                                Source="{Binding Icon}"
                                                Stretch="Uniform" />
                                         <StackPanel Grid.Column="1"
-                                                    Margin="4,0,8,0"
-                                                    Orientation="Horizontal">
-                                            <TextBlock FontWeight="SemiBold"
-                                                       Text="{Binding ImageName}" />
-                                            <TextBlock Margin="5,0,0,0"
-                                                       Text="{Binding ProcessId, StringFormat=({0})}" />
-                                            <TextBlock Margin="6,0,0,0"
-                                                       Foreground="#FF806000"
-                                                       Text="{Binding ReferenceLabel}" />
-                                            <TextBlock Margin="6,0,0,0"
-                                                       Foreground="#FFA12622"
-                                                       Text="{Binding StateLabel}" />
+                                                    Margin="4,0,8,0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock FontWeight="SemiBold"
+                                                           Text="{Binding ImageName}" />
+                                                <TextBlock Margin="5,0,0,0"
+                                                           Text="{Binding ProcessId, StringFormat=({0})}" />
+                                                <TextBlock Margin="6,0,0,0"
+                                                           Foreground="#FF806000"
+                                                           Text="{Binding ReferenceLabel}" />
+                                                <TextBlock Margin="6,0,0,0"
+                                                           Foreground="#FFA12622"
+                                                           Text="{Binding StateLabel}" />
+                                            </StackPanel>
+                                            <TextBlock MaxWidth="430"
+                                                       Foreground="#FF5B6472"
+                                                       FontSize="11"
+                                                       Text="{Binding OriginSummary}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding OriginToolTip}"
+                                                       Visibility="{Binding HasOrigins, Converter={StaticResource BooleanToVisibility}}" />
                                         </StackPanel>
                                         <Border Grid.Column="2"
                                                 Margin="0,0,5,0"
@@ -419,6 +427,12 @@
                                 <GroupBox Header="Summary" Style="{StaticResource SectionCard}">
                                     <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
                                                   ItemsSource="{Binding Summary}" />
+                                </GroupBox>
+                                <GroupBox Header="Renderer origins"
+                                          Style="{StaticResource SectionCard}"
+                                          Visibility="{Binding HasOrigins, Converter={StaticResource BooleanToVisibility}}">
+                                    <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
+                                                  ItemsSource="{Binding Origins}" />
                                 </GroupBox>
                                 <GroupBox Header="Runtime classification" Style="{StaticResource SectionCard}">
                                     <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
@@ -855,10 +869,98 @@
                                   Grid.Column="2"
                                   Margin="12,0,0,0"
                                   VerticalScrollBarVisibility="Auto">
-                        <GroupBox Header="Selected DevTools endpoint" Style="{StaticResource SectionCard}">
-                            <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
-                                          ItemsSource="{Binding SelectedDevTools.Details}" />
-                        </GroupBox>
+                        <StackPanel>
+                            <GroupBox Header="Selected DevTools endpoint" Style="{StaticResource SectionCard}">
+                                <ItemsControl ItemTemplate="{StaticResource PropertyRowTemplate}"
+                                              ItemsSource="{Binding SelectedDevTools.Details}" />
+                            </GroupBox>
+                            <GroupBox Header="Inspectable targets" Style="{StaticResource SectionCard}">
+                                <StackPanel>
+                                    <StackPanel Margin="0,0,0,8"
+                                                Orientation="Horizontal">
+                                        <Button Padding="10,4"
+                                                Click="OpenDevTools_Click"
+                                                Content="Open DevTools"
+                                                IsEnabled="{Binding CanOpenDevTools}"
+                                                ToolTip="Ask the inspected browser to open its native DevTools window for the selected target." />
+                                        <Button Margin="6,0,0,0"
+                                                Padding="10,4"
+                                                Click="OpenRemoteDevTools_Click"
+                                                Content="Open remote DevTools"
+                                                IsEnabled="{Binding CanOpenRemoteDevTools}"
+                                                ToolTip="Open the selected target's remote DevTools frontend in the Windows default browser." />
+                                        <ProgressBar Width="70"
+                                                     Height="6"
+                                                     Margin="10,0,0,0"
+                                                     VerticalAlignment="Center"
+                                                     IsIndeterminate="True">
+                                            <ProgressBar.Style>
+                                                <Style TargetType="ProgressBar">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsLoadingDevToolsTargets}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ProgressBar.Style>
+                                        </ProgressBar>
+                                    </StackPanel>
+                                    <DataGrid Height="190"
+                                              ItemsSource="{Binding DevToolsTargets}"
+                                              SelectedItem="{Binding SelectedDevToolsTarget}">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="Auto" />
+                                            <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="2*" />
+                                            <DataGridTextColumn Header="URL" Binding="{Binding Url}" Width="3*" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </StackPanel>
+                            </GroupBox>
+                            <GroupBox Header="Process internals" Style="{StaticResource SectionCard}">
+                                <StackPanel>
+                                    <StackPanel Margin="0,0,0,8"
+                                                Orientation="Horizontal">
+                                        <Button Padding="10,4"
+                                                Click="ExtractProcessInternals_Click"
+                                                Content="Extract silently"
+                                                IsEnabled="{Binding CanExtractProcessInternals}"
+                                                ToolTip="Create a hidden chrome:// or edge://process-internals target, extract its frame tree, then close the CDP session." />
+                                        <ProgressBar Width="70"
+                                                     Height="6"
+                                                     Margin="10,0,0,0"
+                                                     VerticalAlignment="Center"
+                                                     IsIndeterminate="True">
+                                            <ProgressBar.Style>
+                                                <Style TargetType="ProgressBar">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsExtractingProcessInternals}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ProgressBar.Style>
+                                        </ProgressBar>
+                                    </StackPanel>
+                                    <TextBlock Margin="0,0,0,8"
+                                               Foreground="#FF5B6472"
+                                               Text="{Binding DevToolsActionStatus}"
+                                               TextWrapping="Wrap" />
+                                    <DataGrid Height="240"
+                                              ItemsSource="{Binding ProcessInternalsFrames}">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Page" Binding="{Binding Page}" Width="2*" />
+                                            <DataGridTextColumn Header="Depth" Binding="{Binding Depth}" Width="Auto" />
+                                            <DataGridTextColumn Header="Process" Binding="{Binding Process}" Width="*" />
+                                            <DataGridTextColumn Header="State" Binding="{Binding Lifecycle}" Width="Auto" />
+                                            <DataGridTextColumn Header="SiteInstance" Binding="{Binding SiteInstance}" Width="*" />
+                                            <DataGridTextColumn Header="URL" Binding="{Binding Url}" Width="3*" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </StackPanel>
+                            </GroupBox>
+                        </StackPanel>
                     </ScrollViewer>
                     <ItemsControl Grid.Row="2"
                                   Grid.ColumnSpan="3"

@@ -143,11 +143,29 @@ Processes that just exited remain gray and selectable for one refresh so their
 captured details are not lost, then disappear on the next refresh. The
 Installs and DevTools tabs present processed, actionable information
 instead of raw discovery JSON or internal Mojo-pipe records. All discovery is
-performed through public Core APIs. DevTools refreshes with process discovery
-and also has explicit Refresh and Cancel controls. It identifies endpoints as
-`executable.exe (PID)` and lists actionable TCP endpoints; inherited private
-debugging pipes are omitted because they are point-to-point transports owned by
-their launching controller and cannot be attached to safely by the GUI.
+performed through Core APIs. DevTools refreshes with process discovery and
+also has explicit Refresh and Cancel controls. It identifies endpoints as
+`executable.exe (PID)`, loads their `/json/list` targets, can ask the inspected
+browser to open native DevTools, and can open the endpoint-hosted remote
+DevTools frontend in the Windows default browser. Inherited private debugging
+pipes are omitted because they are point-to-point transports owned by their
+launching controller and cannot be attached to safely by the GUI.
+
+For supported TCP endpoints, the DevTools tab can also extract
+`chrome://process-internals` or `edge://process-internals` through a CDP hidden
+target. No visible tab is added to the browser. The result includes active,
+back-forward-cache, and prerender frame trees, URLs, SiteInstance identifiers,
+and Chromium's internal renderer IDs. Renderer IDs are correlated to captured
+Windows PIDs through each descendant process's `--renderer-client-id` evidence.
+The GUI retains the extracted snapshot when the same endpoint is reconstructed
+by process refresh, and process auto-refresh ignores the short-lived Mojo-pipe
+change caused by creating and closing its own hidden diagnostic target.
+Mapped renderer processes show their normalized frame origins directly in the
+Processes tree and selected-process inspector. Origin mappings use the captured
+PID plus process creation time, survive refresh with the endpoint cache, and
+can be searched with filters such as `origin:example.com`.
+This is a powerful but unsupported Chromium WebUI surface, so failures and
+unmapped IDs are reported rather than treated as authoritative API guarantees.
 
 Process auto refresh is enabled by default. The GUI polls only the visible Mojo
 pipe-name set on a short interval; it performs the expensive process, handle,
