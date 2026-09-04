@@ -60,14 +60,15 @@ public static class ProcessPresentationTreeBuilder
                     processId,
                     descriptors,
                     result.ProcessGraph));
-        int[] rootProcessIds = descriptors.Keys
-            .Where(processId => parents[processId].Length == 0)
-            .OrderBy(processId => descriptors[processId].IsHost ? 0 : 1)
-            .ThenBy(processId => processId)
-            .ToArray();
+        int[] rootProcessIds = OrderByRoleThenProcessId(
+            descriptors.Keys.Where(
+                processId => parents[processId].Length == 0),
+            descriptors);
         if (rootProcessIds.Length == 0)
         {
-            rootProcessIds = descriptors.Keys.Order().ToArray();
+            rootProcessIds = OrderByRoleThenProcessId(
+                descriptors.Keys,
+                descriptors);
         }
 
         Dictionary<int, int> occurrenceCounts = [];
@@ -87,9 +88,10 @@ public static class ProcessPresentationTreeBuilder
             .SelectMany(Flatten)
             .Select(branch => branch.Process.Identity.ProcessId)
             .ToHashSet();
-        foreach (int processId in descriptors.Keys
-            .Where(processId => !represented.Contains(processId))
-            .Order())
+        foreach (int processId in OrderByRoleThenProcessId(
+            descriptors.Keys.Where(
+                processId => !represented.Contains(processId)),
+            descriptors))
         {
             roots.Add(BuildBranch(
                 processId,
@@ -144,12 +146,11 @@ public static class ProcessPresentationTreeBuilder
                 []);
         }
 
-        int[] childIds = parents
-            .Where(pair => pair.Value.Contains(processId))
-            .Select(pair => pair.Key)
-            .OrderBy(childId => descriptors[childId].IsHost ? 0 : 1)
-            .ThenBy(childId => childId)
-            .ToArray();
+        int[] childIds = OrderByRoleThenProcessId(
+            parents
+                .Where(pair => pair.Value.Contains(processId))
+                .Select(pair => pair.Key),
+            descriptors);
         ProcessPresentationBranch[] children = childIds
             .Where(childId => !path.Contains(childId))
             .Select(childId => BuildBranch(
@@ -165,6 +166,29 @@ public static class ProcessPresentationTreeBuilder
             descriptor,
             occurrence > 0,
             children);
+    }
+
+    private static int[] OrderByRoleThenProcessId(
+        IEnumerable<int> processIds,
+        IReadOnlyDictionary<int, ProcessPresentationDescriptor> descriptors)
+    {
+        return processIds
+            .OrderBy(processId => GetRoleOrder(descriptors[processId].Role))
+            .ThenBy(
+                processId => descriptors[processId].Role,
+                StringComparer.OrdinalIgnoreCase)
+            .ThenBy(processId => processId)
+            .ToArray();
+    }
+
+    private static int GetRoleOrder(string role)
+    {
+        return string.Equals(
+            role,
+            "Renderer",
+            StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : 0;
     }
 
     private static IEnumerable<ProcessPresentationBranch> Flatten(

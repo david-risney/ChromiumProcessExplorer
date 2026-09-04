@@ -7,6 +7,17 @@ public interface IProcessSnapshotProvider
     ValueTask<IReadOnlyList<ProcessSnapshotEntry>> CaptureAsync(
         int? maximumConcurrency = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Captures a process snapshot while reusing exact prior process generations.
+    /// </summary>
+    ValueTask<IReadOnlyList<ProcessSnapshotEntry>> CaptureIncrementalAsync(
+        IReadOnlyList<ProcessSnapshotEntry> previousProcesses,
+        int? maximumConcurrency = null,
+        CancellationToken cancellationToken = default)
+    {
+        return CaptureAsync(maximumConcurrency, cancellationToken);
+    }
 }
 
 /// <summary>Provides an optional snapshot of native Windows window topology.</summary>

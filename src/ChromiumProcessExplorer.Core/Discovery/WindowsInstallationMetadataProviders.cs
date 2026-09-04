@@ -203,9 +203,14 @@ public sealed partial class WindowsPackageInstallationProvider
                 continue;
             }
 
-            string displayName = layout.ExecutablePath is null
-                ? identity.Name
-                : GetProductName(layout.ExecutablePath) ?? identity.Name;
+            string? productName = layout.ExecutablePath is null
+                ? null
+                : GetProductName(layout.ExecutablePath);
+            string displayName =
+                InstallationExecutableSelector.IsGenericRuntimeProductName(
+                    productName)
+                        ? identity.Name
+                        : productName!;
             packages.Add(new WindowsPackageInstallation(
                 displayName,
                 layout.Platform,
@@ -241,7 +246,10 @@ public sealed partial class WindowsPackageInstallationProvider
         string appAsar = Path.Combine(resources, "app.asar");
         if (File.Exists(appAsar))
         {
-            string? executable = FindPreferredExecutable(root);
+            string? executable =
+                InstallationExecutableSelector.FindPackageExecutable(
+                    root,
+                    maximumDepth: 3);
             return new PackageLayout(
                 "Electron",
                 executable,
@@ -255,7 +263,9 @@ public sealed partial class WindowsPackageInstallationProvider
         {
             return new PackageLayout(
                 "CEF",
-                FindPreferredExecutable(root),
+                InstallationExecutableSelector.FindPackageExecutable(
+                    root,
+                    maximumDepth: 3),
                 root,
                 directCef,
                 false);
@@ -270,10 +280,10 @@ public sealed partial class WindowsPackageInstallationProvider
         if (nestedArchive is not null)
         {
             string nestedResources = Path.GetDirectoryName(nestedArchive)!;
-            string applicationRoot =
-                Directory.GetParent(nestedResources)?.FullName ?? root;
-            string? executable = FindPreferredExecutable(applicationRoot)
-                ?? FindExecutable(root, maximumDepth: 3);
+            string? executable =
+                InstallationExecutableSelector.FindPackageExecutable(
+                    root,
+                    maximumDepth: 3);
             return new PackageLayout(
                 "Electron",
                 executable,
@@ -307,7 +317,9 @@ public sealed partial class WindowsPackageInstallationProvider
         {
             return new PackageLayout(
                 "CEF",
-                FindPreferredExecutable(root),
+                InstallationExecutableSelector.FindPackageExecutable(
+                    root,
+                    maximumDepth: 3),
                 Path.GetDirectoryName(cef),
                 cef,
                 false);
@@ -340,45 +352,6 @@ public sealed partial class WindowsPackageInstallationProvider
             if (File.Exists(candidate))
             {
                 return candidate;
-            }
-
-            if (current.Depth >= maximumDepth)
-            {
-                continue;
-            }
-
-            foreach (string child in Directory.EnumerateDirectories(current.Path))
-            {
-                if (!File.GetAttributes(child).HasFlag(FileAttributes.ReparsePoint))
-                {
-                    pending.Enqueue((child, current.Depth + 1));
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private static string? FindPreferredExecutable(string root)
-    {
-        return Directory.EnumerateFiles(root, "*.exe", SearchOption.TopDirectoryOnly)
-            .OrderBy(path => Path.GetFileName(path).Contains(
-                "update",
-                StringComparison.OrdinalIgnoreCase))
-            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
-    }
-
-    private static string? FindExecutable(string root, int maximumDepth)
-    {
-        Queue<(string Path, int Depth)> pending = new();
-        pending.Enqueue((root, 0));
-        while (pending.TryDequeue(out (string Path, int Depth) current))
-        {
-            string? executable = FindPreferredExecutable(current.Path);
-            if (executable is not null)
-            {
-                return executable;
             }
 
             if (current.Depth >= maximumDepth)

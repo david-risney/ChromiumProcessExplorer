@@ -151,26 +151,41 @@ DevTools frontend in the Windows default browser. Inherited private debugging
 pipes are omitted because they are point-to-point transports owned by their
 launching controller and cannot be attached to safely by the GUI.
 
-For supported TCP endpoints, the DevTools tab can also extract
-`chrome://process-internals` or `edge://process-internals` through a CDP hidden
-target. No visible tab is added to the browser. The result includes active,
-back-forward-cache, and prerender frame trees, URLs, SiteInstance identifiers,
-and Chromium's internal renderer IDs. Renderer IDs are correlated to captured
-Windows PIDs through each descendant process's `--renderer-client-id` evidence.
-The GUI retains the extracted snapshot when the same endpoint is reconstructed
-by process refresh, and process auto-refresh ignores the short-lived Mojo-pipe
-change caused by creating and closing its own hidden diagnostic target.
-Mapped renderer processes show their normalized frame origins directly in the
-Processes tree and selected-process inspector. Origin mappings use the captured
-PID plus process creation time, survive refresh with the endpoint cache, and
-can be searched with filters such as `origin:example.com`.
+For supported TCP endpoints, the GUI automatically extracts
+`chrome://process-internals` or `edge://process-internals` through a hidden CDP
+target during process refresh. No visible tab is added to the browser. The
+default-on **Auto extract frame info** setting can be disabled from the DevTools
+tab; disabling it clears cached frame and origin data. A full process refresh
+checks every validated browser endpoint. A light automatic refresh checks only
+browser process groups whose generation-safe membership changed, while
+unchanged groups reuse their previous snapshots. Failed extraction retains the
+last successful data for that group and reports the failure.
+
+The result includes active, back-forward-cache, and prerender frame trees,
+URLs, SiteInstance identifiers, and Chromium's internal renderer IDs. Renderer
+IDs are correlated to captured Windows PIDs through each descendant process's
+`--renderer-client-id` evidence. Mapped renderer processes show normalized
+origins and tab/frame child rows directly in the Processes tree and
+selected-process inspector; there is no separate raw frame table. Origin
+mappings use the captured PID plus process creation time and can be searched
+with filters such as `origin:example.com`. Process expansion and selection
+state are carried across refreshes, including the one-refresh retained
+representation of a process that has just exited.
+
+Process inspector details are cached by PID plus process creation time. Light
+process refreshes and switching between previously inspected processes reuse
+that snapshot without blanking the details pane or repeating the slower detail
+query. The inspector's **Refresh** button explicitly reloads details and
+diagnostics for the selected live process generation.
 This is a powerful but unsupported Chromium WebUI surface, so failures and
 unmapped IDs are reported rather than treated as authoritative API guarantees.
 
-Process auto refresh is enabled by default. The GUI polls only the visible Mojo
-pipe-name set on a short interval; it performs the expensive process, handle,
-relationship, window, and DevTools refresh only when that lightweight
-fingerprint changes. It can be disabled from the Processes toolbar.
+Process auto refresh is enabled by default. It captures process identities on a
+short interval, reuses all enriched metadata for unchanged `(PID, creation
+time)` generations, removes exited generations, and performs handle, window,
+and DevTools discovery only for newly observed processes. The Processes
+**Refresh** button continues to perform a complete scan. Auto refresh can be
+disabled from the Processes toolbar.
 
 Filtering the process tree keeps matching nodes and their ancestors visible and
 expands those ancestor paths automatically. The same toolbar provides an
@@ -194,6 +209,15 @@ tree cannot starve the other roots. Known browser/runtime locations, registered
 install paths, running executable directories, and their path ancestors are
 traversed before unrelated directories. Registry, Windows package, and
 browser-managed app discovery also run concurrently.
+Helper binaries such as `createdump.exe`, crash handlers, and
+`CefSharp.BrowserSubprocess.exe` are not used as application identities.
+Packaged applications prefer the executable declared by `AppxManifest.xml`;
+filesystem marker discovery walks upward to find the owning application
+executable when only helpers are present beside the Chromium runtime files.
+Chromium source checkouts are recognized through `.gn` plus
+`out\<configuration>\chrome.exe` layouts. Common checkout paths and explicitly
+configured installation search folders are probed without recursively scanning
+the full source tree.
 
 Process context menus can launch the configured debugger for the selected PID,
 open Process Explorer at that PID, terminate its process tree, or configure
@@ -214,12 +238,20 @@ The Command Line Templates tab manages named launch modifications. Each
 template has an executable-name regular expression, arguments to add, and
 literal or `regex:` removal rules. Duplicate comma-list switches such as
 `--enable-features` are merged and scalar switches are replaced by the last
-configured value. A default `Enable remote debugging` template adds
-`--remote-debugging-port=9222` and a product-specific non-default user-data
+configured value. Added arguments can use `{env:NAME}` for an environment
+variable, `{random-file}` for one random filename per launch,
+`{target-specific-file}` for a stable `<executable>-<path-hash>` filename, and
+`{executable}` for the target executable name without its extension. An
+undefined `{env:NAME}` prevents launch and reports the missing variable. A
+default `Enable remote debugging` template adds
+`--remote-debugging-port=0` and a product-specific non-default user-data
 directory under
 `%LOCALAPPDATA%\ChromiumProcessExplorer\RemoteDebugging\{executable}`. The
 separate profile is required because
 [Chrome 136 and later ignore remote debugging switches for the default Chrome profile](https://developer.chrome.com/blog/remote-debugging-port).
+Argument suggestions combine the Chromium switch catalog, running process
+command lines, and PSReadLine history entries whose invoked executable matches
+a discovered install, with or without the `.exe` suffix.
 Applicable templates appear in process and install context menus. Process
 relaunch is limited to live browser-role
 processes and is unavailable for WebView2, hosts, renderers, GPU processes, and

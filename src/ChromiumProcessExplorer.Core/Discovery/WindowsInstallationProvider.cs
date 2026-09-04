@@ -193,6 +193,11 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         RegistryDiscoveryBatch? registryBatch =
             registryTask?.GetAwaiter().GetResult();
         string[] searchRoots = GetSearchRoots();
+        DiscoverChromiumSourceBuilds(
+            searchRoots.Concat(GetKnownChromiumSourceRoots()),
+            installations,
+            issues,
+            cancellationToken);
         List<DiscoveryIssue>[] filesystemIssues = searchRoots
             .Select(_ => new List<DiscoveryIssue>())
             .ToArray();
@@ -210,6 +215,11 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             },
             index =>
             {
+                if (IsChromiumCheckoutSearchRoot(searchRoots[index]))
+                {
+                    return;
+                }
+
                 ScanSearchRoot(
                     searchRoots[index],
                     installations,
@@ -762,12 +772,22 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             .ToArray();
         (string platform, string name) = ClassifyMarkers(markerNames, installPath);
         string? executablePath = FindPreferredExecutable(installPath);
+        bool isChromiumSourceBuild = executablePath is not null
+            && IsChromiumSourceBuildExecutable(executablePath);
+        if (isChromiumSourceBuild)
+        {
+            platform = "Chromium";
+            name = GetChromiumSourceBuildName(executablePath!);
+        }
+
         string? productName = executablePath is null
             ? null
             : GetProductName(executablePath);
-        if (!string.IsNullOrWhiteSpace(productName))
+        if (!isChromiumSourceBuild
+            && !InstallationExecutableSelector.IsGenericRuntimeProductName(
+                productName))
         {
-            name = productName;
+            name = productName!;
         }
 
         if (installations.Values.Any(existing =>
@@ -781,24 +801,32 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             installations,
             installPath,
             name,
-            "Application",
+            isChromiumSourceBuild ? "Browser" : "Application",
             platform);
         if (executablePath is not null)
         {
             builder.SetExecutable(executablePath);
         }
         builder.SetDiscoveryMetadata(
-            "Portable",
-            "Filesystem marker scan",
-            platform switch
-            {
-                "Electron" or "CEF"
-                    or RuntimePlatformIds.Nwjs
-                    or RuntimePlatformIds.QtWebEngine => false,
-                "WebView2" => null,
-                _ => null,
-            },
+            isChromiumSourceBuild ? "Source" : "Portable",
+            isChromiumSourceBuild
+                ? "Chromium source output"
+                : "Filesystem marker scan",
+            isChromiumSourceBuild
+                ? false
+                : platform switch
+                {
+                    "Electron" or "CEF"
+                        or RuntimePlatformIds.Nwjs
+                        or RuntimePlatformIds.QtWebEngine => false,
+                    "WebView2" => null,
+                    _ => null,
+                },
             executablePath is null ? "Low" : "Medium");
+        if (isChromiumSourceBuild)
+        {
+            builder.SetChannel("Source");
+        }
         builder.SetLayoutPaths(markerFiles);
 
         foreach (string markerFile in markerFiles)
@@ -818,7 +846,9 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
     {
         ProcessSnapshotEntry[][] processGroups = runningProcesses
             .Where(process => process.IsLikelyChromium
-                && !string.IsNullOrWhiteSpace(process.ExecutablePath))
+                && !string.IsNullOrWhiteSpace(process.ExecutablePath)
+                && !InstallationExecutableSelector.IsHelperExecutable(
+                    process.ExecutablePath))
             .GroupBy(
                 process => Path.GetFullPath(process.ExecutablePath!),
                 StringComparer.OrdinalIgnoreCase)
@@ -881,6 +911,146 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static IEnumerable<string> GetKnownChromiumSourceRoots()
+    {
+        foreach (string variable in new[]
+        {
+            "CHROMIUM_SRC",
+            "CHROMIUM_CHECKOUT",
+        })
+        {
+            string? path = Environment.GetEnvironmentVariable(variable);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                yield return path;
+            }
+        }
+
+        string userProfile = Environment.GetFolderPath(
+            Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(userProfile))
+        {
+            yield return Path.Combine(userProfile, "chromium", "src");
+            yield return Path.Combine(
+                userProfile,
+                "source",
+                "chromium",
+                "src");
+        }
+
+        string systemDrive =
+            Path.GetPathRoot(Environment.SystemDirectory) ?? @"C:\";
+        yield return Path.Combine(systemDrive, "src", "chromium", "src");
+    }
+
+    private static void DiscoverChromiumSourceBuilds(
+        IEnumerable<string> roots,
+        Dictionary<string, InstallationBuilder> installations,
+        List<DiscoveryIssue> issues,
+        CancellationToken cancellationToken)
+    {
+        foreach (string rootValue in roots
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string root;
+            try
+            {
+                root = Path.GetFullPath(rootValue);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException
+                    or IOException
+                    or NotSupportedException)
+            {
+                continue;
+            }
+
+            try
+            {
+                foreach (string outputDirectory in
+                    GetChromiumOutputDirectories(root))
+                {
+                    string executablePath = Path.Combine(
+                        outputDirectory,
+                        "chrome.exe");
+                    if (!IsChromiumSourceBuildExecutable(executablePath))
+                    {
+                        continue;
+                    }
+
+                    InstallationBuilder builder = GetOrCreate(
+                        installations,
+                        outputDirectory,
+                        GetChromiumSourceBuildName(executablePath),
+                        "Browser",
+                        "Chromium");
+                    builder.RefineIdentity(
+                        GetChromiumSourceBuildName(executablePath),
+                        "Browser",
+                        "Chromium");
+                    builder.SetExecutable(executablePath);
+                    builder.SetChannel("Source");
+                    builder.SetDiscoveryMetadata(
+                        "Source",
+                        "Chromium source output",
+                        false,
+                        "High");
+                    builder.AddEvidence(new InstallationEvidence(
+                        "chromium-source-build",
+                        "Found chrome.exe in a Chromium source out directory.",
+                        executablePath));
+                }
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException)
+            {
+                issues.Add(new DiscoveryIssue(
+                    "installation-chromium-source",
+                    $"{root}: {exception.Message}"));
+            }
+        }
+    }
+
+    private static IEnumerable<string> GetChromiumOutputDirectories(
+        string root)
+    {
+        if (IsChromiumSourceBuildDirectory(root))
+        {
+            yield return root;
+        }
+
+        foreach (string outputRoot in new[]
+        {
+            Path.Combine(root, "out"),
+            Path.Combine(root, "src", "out"),
+        }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(outputRoot))
+            {
+                continue;
+            }
+
+            foreach (string directory in Directory.EnumerateDirectories(
+                outputRoot,
+                "*",
+                SearchOption.TopDirectoryOnly))
+            {
+                yield return directory;
+            }
+        }
+    }
+
+    private static bool IsChromiumCheckoutSearchRoot(string root)
+    {
+        return (File.Exists(Path.Combine(root, ".gn"))
+                && Directory.Exists(Path.Combine(root, "out")))
+            || (File.Exists(Path.Combine(root, "src", ".gn"))
+                && Directory.Exists(Path.Combine(root, "src", "out")));
     }
 
     private static IEnumerable<string> GetDefaultSearchRoots()
@@ -951,7 +1121,12 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         string current = markerDirectory;
         for (int depth = 0; depth < 8 && IsSameOrChildPath(current, searchRoot); depth++)
         {
-            if (Directory.EnumerateFiles(current, "*.exe", SearchOption.TopDirectoryOnly).Any())
+            if (Directory.EnumerateFiles(
+                    current,
+                    "*.exe",
+                    SearchOption.TopDirectoryOnly)
+                .Any(path =>
+                    !InstallationExecutableSelector.IsHelperExecutable(path)))
             {
                 return current;
             }
@@ -987,10 +1162,8 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
     {
         try
         {
-            return Directory.EnumerateFiles(installPath, "*.exe", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => IsHelperExecutable(path))
-                .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
+            return InstallationExecutableSelector.FindPreferredExecutable(
+                installPath);
         }
         catch (Exception exception) when (
             exception is IOException
@@ -998,14 +1171,6 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         {
             return null;
         }
-    }
-
-    private static bool IsHelperExecutable(string path)
-    {
-        string name = Path.GetFileName(path);
-        return name.Contains("helper", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("crash", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("notification", StringComparison.OrdinalIgnoreCase);
     }
 
     private static (string Platform, string Name) ClassifyMarkers(
@@ -1325,6 +1490,16 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         string fileName = Path.GetFileName(executablePath);
         string path = executablePath;
 
+        if (fileName.Equals("chrome.exe", StringComparison.OrdinalIgnoreCase)
+            && IsChromiumSourceBuildExecutable(executablePath))
+        {
+            return (
+                "Browser",
+                "Chromium",
+                GetChromiumSourceBuildName(executablePath),
+                "Source");
+        }
+
         if (fileName.Equals("msedgewebview2.exe", StringComparison.OrdinalIgnoreCase))
         {
             return ("Runtime", "WebView2", "WebView2 Runtime", "Evergreen");
@@ -1369,15 +1544,15 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
 
         if (GetElectronApplicationPath(executablePath) is not null)
         {
-            return ("Application", "Electron", GetProductName(executablePath)
-                ?? Path.GetFileNameWithoutExtension(fileName), null);
+            return ("Application", "Electron", GetApplicationName(
+                executablePath), null);
         }
 
         if (fileName.Equals("nw.exe", StringComparison.OrdinalIgnoreCase)
             || FindSiblingFile(executablePath, "nw.dll") is not null)
         {
-            return ("Application", RuntimePlatformIds.Nwjs, GetProductName(
-                executablePath) ?? Path.GetFileNameWithoutExtension(fileName), null);
+            return ("Application", RuntimePlatformIds.Nwjs, GetApplicationName(
+                executablePath), null);
         }
 
         if (fileName.StartsWith(
@@ -1393,13 +1568,40 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             return (
                 "Application",
                 RuntimePlatformIds.QtWebEngine,
-                GetProductName(executablePath)
-                    ?? Path.GetFileNameWithoutExtension(fileName),
+                GetApplicationName(executablePath),
                 null);
         }
 
-        return ("Application", "Chromium", GetProductName(executablePath)
-            ?? Path.GetFileNameWithoutExtension(fileName), null);
+        return ("Application", "Chromium", GetApplicationName(
+            executablePath), null);
+    }
+
+    private static bool IsChromiumSourceBuildExecutable(string executablePath)
+    {
+        return File.Exists(executablePath)
+            && IsChromiumSourceBuildDirectory(
+                Path.GetDirectoryName(executablePath)!);
+    }
+
+    private static bool IsChromiumSourceBuildDirectory(string directory)
+    {
+        DirectoryInfo? configuration = new(directory);
+        DirectoryInfo? output = configuration.Parent;
+        DirectoryInfo? checkout = output?.Parent;
+        return output?.Name.Equals(
+                "out",
+                StringComparison.OrdinalIgnoreCase) == true
+            && checkout is not null
+            && File.Exists(Path.Combine(checkout.FullName, ".gn"))
+            && File.Exists(Path.Combine(directory, "chrome.exe"))
+            && (File.Exists(Path.Combine(directory, "chrome.dll"))
+                || File.Exists(Path.Combine(directory, "chrome_elf.dll")));
+    }
+
+    private static string GetChromiumSourceBuildName(string executablePath)
+    {
+        return $"Chromium Source Build ({new DirectoryInfo(
+            Path.GetDirectoryName(executablePath)!).Name})";
     }
 
     private static string? GetElectronApplicationPath(string executablePath)
@@ -1542,6 +1744,15 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         {
             return null;
         }
+    }
+
+    private static string GetApplicationName(string executablePath)
+    {
+        string? productName = GetProductName(executablePath);
+        return InstallationExecutableSelector.IsGenericRuntimeProductName(
+            productName)
+                ? Path.GetFileNameWithoutExtension(executablePath)
+                : productName!;
     }
 
     private static string? GetPortableExecutableArchitecture(string path)
@@ -1955,6 +2166,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 "MSI" or "Squirrel" or "NSIS" => 95,
                 "Registry" => 90,
                 "BrowserManaged" => 85,
+                "Source" => 75,
                 "KnownLocation" => 70,
                 "Portable" => 40,
                 _ => 0,

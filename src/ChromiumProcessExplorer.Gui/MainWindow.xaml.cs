@@ -49,6 +49,13 @@ public partial class MainWindow : Window
         _viewModel.CancelProcessRefresh();
     }
 
+    private async void RefreshProcessDetails_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await _viewModel.RefreshSelectedProcessDetailsAsync();
+    }
+
     private void CancelInstallationScan_Click(object sender, RoutedEventArgs e)
     {
         _viewModel.CancelInstallationScan();
@@ -383,8 +390,13 @@ public partial class MainWindow : Window
         object sender,
         RoutedPropertyChangedEventArgs<object> e)
     {
-        await _viewModel.SelectProcessAsync(
-            e.NewValue as ProcessTreeItemViewModel);
+        ProcessTreeItemViewModel? process = e.NewValue switch
+        {
+            ProcessTreeItemViewModel item => item,
+            ProcessFrameTreeItemViewModel frame => frame.Owner,
+            _ => null,
+        };
+        await _viewModel.SelectProcessAsync(process);
     }
 
     private async void DevTools_SelectionChanged(
@@ -414,13 +426,6 @@ public partial class MainWindow : Window
         RoutedEventArgs e)
     {
         _viewModel.OpenSelectedRemoteDevTools();
-    }
-
-    private async void ExtractProcessInternals_Click(
-        object sender,
-        RoutedEventArgs e)
-    {
-        await _viewModel.ExtractProcessInternalsAsync();
     }
 
     private void OpenDetailTarget_Click(

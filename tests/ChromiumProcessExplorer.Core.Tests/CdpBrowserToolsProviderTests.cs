@@ -101,6 +101,44 @@ public sealed class CdpBrowserToolsProviderTests
     }
 
     [Fact]
+    public async Task DiscoverTargetsReplacesHostedFrontendWithLoopbackFrontend()
+    {
+        HttpClient httpClient = new(new DelegateHandler(
+            (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = new HttpRequestMessage(
+                    HttpMethod.Get,
+                    "http://127.0.0.1:9222/json/list"),
+                Content = new StringContent(
+                    """
+                    [
+                      {
+                        "id": "page-1",
+                        "type": "page",
+                        "title": "Example",
+                        "url": "https://example.test/",
+                        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@revision/inspector.html?ws=127.0.0.1:9222/devtools/page/page-1",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/page-1"
+                      }
+                    ]
+                    """,
+                    Encoding.UTF8,
+                    "application/json"),
+            })));
+        CdpBrowserToolsProvider provider = new(
+            httpClient,
+            new StubSessionClient(),
+            TimeSpan.FromSeconds(1));
+
+        CdpInspectableTarget target = Assert.Single(
+            (await provider.DiscoverTargetsAsync(CreateTransport())).Targets);
+
+        Assert.Equal(
+            "http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/page-1",
+            target.DevToolsFrontendUrl);
+    }
+
+    [Fact]
     public async Task CaptureProcessInternalsUsesEdgeSchemeAndMapsWindowsPid()
     {
         StubSessionClient client = new()

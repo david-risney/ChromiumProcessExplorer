@@ -174,6 +174,83 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
+    public void PresentationTreeSortsByRoleThenPidWithRenderersLast()
+    {
+        ProcessSnapshotEntry browser = CreateProcess(100, "chrome.exe", true);
+        ProcessSnapshotEntry laterGpu = CreateProcess(
+            500,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "gpu-process",
+        };
+        ProcessSnapshotEntry earlierGpu = CreateProcess(
+            300,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "gpu-process",
+        };
+        ProcessSnapshotEntry utility = CreateProcess(
+            200,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "utility",
+        };
+        ProcessSnapshotEntry renderer = CreateProcess(
+            150,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        ProcessSnapshotEntry rootRenderer = CreateProcess(
+            50,
+            "other.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        ProcessGraph graph = new(
+            [browser, laterGpu, earlierGpu, utility, renderer, rootRenderer],
+            [
+                CreateEdge(
+                    browser,
+                    laterGpu,
+                    ProcessRelationshipType.ChromiumSubprocess),
+                CreateEdge(
+                    browser,
+                    earlierGpu,
+                    ProcessRelationshipType.ChromiumSubprocess),
+                CreateEdge(
+                    browser,
+                    utility,
+                    ProcessRelationshipType.ChromiumSubprocess),
+                CreateEdge(
+                    browser,
+                    renderer,
+                    ProcessRelationshipType.ChromiumSubprocess),
+            ]);
+
+        ProcessPresentationTree tree = ProcessPresentationTreeBuilder.Build(
+            CreateDiscoveryResult(
+                [browser, laterGpu, earlierGpu, utility, renderer, rootRenderer],
+                graph));
+        ProcessPresentationBranch browserBranch = Assert.Single(
+            tree.Roots,
+            root => root.Process.Identity.ProcessId == browser.ProcessId);
+
+        Assert.Equal(
+            [earlierGpu.ProcessId, laterGpu.ProcessId, utility.ProcessId, renderer.ProcessId],
+            browserBranch.Children.Select(child =>
+                child.Process.Identity.ProcessId));
+        Assert.Equal(
+            rootRenderer.ProcessId,
+            tree.Roots[^1].Process.Identity.ProcessId);
+    }
+
+    [Fact]
     public async Task RefreshRetainsExitedGenerationOnceThenRemovesIt()
     {
         ProcessSnapshotEntry process = CreateProcess(
@@ -281,6 +358,514 @@ public sealed class GuiViewModelTests
         Assert.Equal(process.Identity(), viewModel.SelectedProcess?.Identity);
         Assert.Equal(process.Identity(), viewModel.ProcessInspector?.Identity);
         Assert.True(viewModel.SelectedProcess?.IsSelected);
+    }
+
+    [Fact]
+    public async Task RefreshAppliesExistingIconBeforeIconReloadCompletes()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "sample.exe",
+            true);
+        ChromiumDiscoveryResult result = CreateDiscoveryResult(
+            [process],
+            new ProcessGraph([process], []));
+        ProcessSnapshotEntry added = CreateProcess(
+            456,
+            "other.exe",
+            true);
+        ChromiumDiscoveryResult changed = CreateDiscoveryResult(
+            [process, added],
+            new ProcessGraph([process, added], []));
+        DrawingImage icon = new();
+        icon.Freeze();
+        TaskCompletionSource reloadStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseReload =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int requests = 0;
+        DelegatingIconProvider icons = new(async (_, cancellationToken) =>
+        {
+            requests++;
+            if (requests > 1)
+            {
+                reloadStarted.TrySetResult();
+                await releaseReload.Task.WaitAsync(cancellationToken);
+            }
+
+            return icon;
+        });
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(result),
+            DiscoverLightProcesses = (_, _) => ValueTask.FromResult(changed),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            icons,
+            TimeSpan.FromMilliseconds(10));
+        await viewModel.RefreshProcessesAsync();
+        Assert.Same(icon, Assert.Single(viewModel.ProcessRoots).Icon);
+
+        viewModel.StartAutoRefresh();
+        await reloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        viewModel.StopAutoRefresh();
+
+        ProcessTreeItemViewModel surviving = Assert.Single(
+            viewModel.ProcessRoots,
+            item => item.Identity == process.Identity());
+        Assert.Same(icon, surviving.Icon);
+
+        releaseReload.SetResult();
+        await WaitForAsync(() => !viewModel.IsProcessActivityBusy);
+    }
+
+    [Fact]
+    public async Task SelectingCachedProcessGenerationDoesNotReloadDetails()
+    {
+        ProcessSnapshotEntry first = CreateProcess(123, "first.exe", true);
+        ProcessSnapshotEntry second = CreateProcess(456, "second.exe", true);
+        Dictionary<int, int> detailQueries = [];
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [first, second],
+                    new ProcessGraph([first, second], []))),
+            DiscoverDetails = (processId, _) =>
+            {
+                detailQueries[processId] =
+                    detailQueries.GetValueOrDefault(processId) + 1;
+                return ValueTask.FromResult(CreateDetails(
+                    processId == first.ProcessId ? first : second));
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+        await viewModel.RefreshProcessesAsync();
+        ProcessTreeItemViewModel firstItem = Assert.Single(
+            viewModel.ProcessRoots,
+            item => item.Identity == first.Identity());
+        ProcessTreeItemViewModel secondItem = Assert.Single(
+            viewModel.ProcessRoots,
+            item => item.Identity == second.Identity());
+
+        await viewModel.SelectProcessAsync(firstItem);
+        await viewModel.SelectProcessAsync(secondItem);
+        await viewModel.SelectProcessAsync(firstItem);
+
+        Assert.Equal(1, detailQueries[first.ProcessId]);
+        Assert.Equal(1, detailQueries[second.ProcessId]);
+        Assert.Equal(first.Identity(), viewModel.ProcessInspector?.Identity);
+        Assert.Contains(
+            "cached details",
+            viewModel.Status,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task LightRefreshRetainsCachedInspectorWithoutReloadingDetails()
+    {
+        ProcessSnapshotEntry process = CreateProcess(123, "sample.exe", true);
+        ProcessSnapshotEntry added = CreateProcess(456, "other.exe", true);
+        ChromiumDiscoveryResult initial = CreateDiscoveryResult(
+            [process],
+            new ProcessGraph([process], []));
+        ChromiumDiscoveryResult changed = CreateDiscoveryResult(
+            [process, added],
+            new ProcessGraph([process, added], []));
+        int detailQueries = 0;
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(initial),
+            DiscoverLightProcesses = (_, _) => ValueTask.FromResult(changed),
+            DiscoverDetails = (_, _) =>
+            {
+                detailQueries++;
+                return ValueTask.FromResult(CreateDetails(process));
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            TimeSpan.FromMilliseconds(10));
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.SelectProcessAsync(
+            Assert.Single(viewModel.ProcessRoots));
+
+        viewModel.StartAutoRefresh();
+        await WaitForAsync(() => viewModel.ProcessRoots.Count == 2);
+        viewModel.StopAutoRefresh();
+
+        Assert.Equal(1, detailQueries);
+        Assert.Equal(process.Identity(), viewModel.ProcessInspector?.Identity);
+        Assert.NotNull(viewModel.ProcessInspector);
+    }
+
+    [Fact]
+    public async Task SelectionChangedWhileRefreshFinishesIsNotOverwritten()
+    {
+        ProcessSnapshotEntry browser = CreateProcess(123, "chrome.exe", true);
+        ProcessSnapshotEntry renderer = CreateProcess(
+            124,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        ChromiumDiscoveryResult initial = CreateDiscoveryResult(
+            [browser],
+            new ProcessGraph([browser], []),
+            cdp: new CdpDiscoveryResult(
+                SnapshotTime,
+                [CreateValidatedTransport(browser.ProcessId)]));
+        ChromiumDiscoveryResult changed = CreateDiscoveryResult(
+            [browser, renderer],
+            new ProcessGraph(
+                [browser, renderer],
+                [CreateEdge(
+                    browser,
+                    renderer,
+                    ProcessRelationshipType.ChromiumSubprocess)]),
+            cdp: new CdpDiscoveryResult(
+                SnapshotTime,
+                [CreateValidatedTransport(browser.ProcessId)]));
+        int extractionCount = 0;
+        TaskCompletionSource extractionStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseExtraction =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(initial),
+            DiscoverLightProcesses = (_, _) => ValueTask.FromResult(changed),
+            DiscoverDetails = (processId, _) => ValueTask.FromResult(
+                CreateDetails(
+                    processId == browser.ProcessId ? browser : renderer)),
+            DiscoverProcessInternals = async (_, _, _, cancellationToken) =>
+            {
+                extractionCount++;
+                if (extractionCount > 1)
+                {
+                    extractionStarted.TrySetResult();
+                    await releaseExtraction.Task.WaitAsync(cancellationToken);
+                }
+
+                return new CdpProcessInternalsResult(
+                    SnapshotTime,
+                    browser.ProcessId,
+                    "chrome://process-internals/",
+                    [],
+                    []);
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            TimeSpan.FromMilliseconds(10));
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.SelectProcessAsync(
+            Assert.Single(viewModel.ProcessRoots));
+
+        viewModel.StartAutoRefresh();
+        await extractionStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        ProcessTreeItemViewModel browserItem = Assert.Single(
+            viewModel.FilteredProcessRoots);
+        browserItem.IsExpanded = true;
+        ProcessTreeItemViewModel rendererItem = Assert.Single(
+            FlattenTree(viewModel.ProcessRoots),
+            item => item.Identity == renderer.Identity());
+        await viewModel.SelectProcessAsync(rendererItem);
+        releaseExtraction.SetResult();
+        await WaitForAsync(() => !viewModel.IsExtractingProcessInternals);
+        viewModel.StopAutoRefresh();
+
+        Assert.Equal(renderer.Identity(), viewModel.SelectedProcess?.Identity);
+        Assert.Equal(renderer.Identity(), viewModel.ProcessInspector?.Identity);
+        Assert.True(Assert.Single(viewModel.FilteredProcessRoots).IsExpanded);
+    }
+
+    [Fact]
+    public async Task RefreshSelectedProcessDetailsReloadsCachedInspector()
+    {
+        ProcessSnapshotEntry process = CreateProcess(123, "sample.exe", true);
+        int detailQueries = 0;
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process],
+                    new ProcessGraph([process], []))),
+            DiscoverDetails = (_, _) =>
+            {
+                detailQueries++;
+                return ValueTask.FromResult(CreateDetails(process));
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.SelectProcessAsync(
+            Assert.Single(viewModel.ProcessRoots));
+
+        Assert.True(viewModel.CanRefreshProcessDetails);
+        await viewModel.RefreshSelectedProcessDetailsAsync();
+
+        Assert.Equal(2, detailQueries);
+        Assert.Equal(process.Identity(), viewModel.ProcessInspector?.Identity);
+        Assert.Equal("Loaded details for PID 123.", viewModel.Status);
+    }
+
+    [Fact]
+    public async Task AutoRefreshUsesLightProcessDiscovery()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "sample.exe",
+            true);
+        ChromiumDiscoveryResult result = CreateDiscoveryResult(
+            [process],
+            new ProcessGraph([process], []));
+        int fullRefreshes = 0;
+        int lightRefreshes = 0;
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ =>
+            {
+                fullRefreshes++;
+                return ValueTask.FromResult(result);
+            },
+            DiscoverLightProcesses = (previous, _) =>
+            {
+                lightRefreshes++;
+                return ValueTask.FromResult(previous);
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            TimeSpan.FromMilliseconds(10));
+        await viewModel.RefreshProcessesAsync();
+
+        viewModel.StartAutoRefresh();
+        await Task.Delay(75);
+        viewModel.StopAutoRefresh();
+        await viewModel.RefreshProcessesAsync();
+
+        Assert.Equal(2, fullRefreshes);
+        Assert.True(lightRefreshes > 0);
+    }
+
+    [Fact]
+    public async Task FullRefreshQueuesBehindActiveLightRefresh()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "sample.exe",
+            true);
+        ChromiumDiscoveryResult result = CreateDiscoveryResult(
+            [process],
+            new ProcessGraph([process], []));
+        int fullRefreshes = 0;
+        TaskCompletionSource lightStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseLight =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ =>
+            {
+                fullRefreshes++;
+                return ValueTask.FromResult(result);
+            },
+            DiscoverLightProcesses = async (previous, cancellationToken) =>
+            {
+                lightStarted.TrySetResult();
+                await releaseLight.Task.WaitAsync(cancellationToken);
+                return previous;
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            TimeSpan.FromMilliseconds(10));
+        await viewModel.RefreshProcessesAsync();
+
+        viewModel.StartAutoRefresh();
+        await lightStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Task fullRefresh = viewModel.RefreshProcessesAsync();
+        Task duplicateRefresh = viewModel.RefreshProcessesAsync();
+        await Task.Delay(50);
+
+        Assert.False(fullRefresh.IsCompleted);
+        Assert.True(duplicateRefresh.IsCompleted);
+        Assert.Contains(
+            "queued",
+            viewModel.Status,
+            StringComparison.OrdinalIgnoreCase);
+
+        releaseLight.SetResult();
+        await fullRefresh;
+        viewModel.StopAutoRefresh();
+
+        Assert.Equal(2, fullRefreshes);
+    }
+
+    [Fact]
+    public async Task ExitedProcessesRetainFormerSiblingOrder()
+    {
+        ProcessSnapshotEntry newFirst = CreateProcess(50, "new.exe", true);
+        ProcessSnapshotEntry first = CreateProcess(100, "first.exe", true);
+        ProcessSnapshotEntry exited = CreateProcess(200, "exited.exe", true);
+        ProcessSnapshotEntry last = CreateProcess(300, "last.exe", true);
+        Queue<ChromiumDiscoveryResult> results = new(
+        [
+            CreateDiscoveryResult(
+                [first, exited, last],
+                new ProcessGraph([first, exited, last], [])),
+            CreateDiscoveryResult(
+                [newFirst, first, last],
+                new ProcessGraph([newFirst, first, last], [])),
+        ]);
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(results.Dequeue()),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.RefreshProcessesAsync();
+
+        Assert.Equal(
+            ["new.exe", "first.exe", "exited.exe", "last.exe"],
+            viewModel.ProcessRoots.Select(item => item.ImageName));
+        Assert.True(viewModel.ProcessRoots[2].IsStale);
+    }
+
+    [Fact]
+    public async Task ExitedChildProcessesRetainFormerSiblingOrder()
+    {
+        ProcessSnapshotEntry browser = CreateProcess(1000, "browser.exe", true);
+        ProcessSnapshotEntry newFirst = CreateProcess(1050, "new.exe", true);
+        ProcessSnapshotEntry first = CreateProcess(1100, "first.exe", true);
+        ProcessSnapshotEntry exited = CreateProcess(1200, "exited.exe", true);
+        ProcessSnapshotEntry last = CreateProcess(1300, "last.exe", true);
+        Queue<ChromiumDiscoveryResult> results = new(
+        [
+            CreateDiscoveryResult(
+                [browser, first, exited, last],
+                new ProcessGraph(
+                    [browser, first, exited, last],
+                    [
+                        CreateEdge(
+                            browser,
+                            first,
+                            ProcessRelationshipType.ChromiumSubprocess),
+                        CreateEdge(
+                            browser,
+                            exited,
+                            ProcessRelationshipType.ChromiumSubprocess),
+                        CreateEdge(
+                            browser,
+                            last,
+                            ProcessRelationshipType.ChromiumSubprocess),
+                    ])),
+            CreateDiscoveryResult(
+                [browser, newFirst, first, last],
+                new ProcessGraph(
+                    [browser, newFirst, first, last],
+                    [
+                        CreateEdge(
+                            browser,
+                            newFirst,
+                            ProcessRelationshipType.ChromiumSubprocess),
+                        CreateEdge(
+                            browser,
+                            first,
+                            ProcessRelationshipType.ChromiumSubprocess),
+                        CreateEdge(
+                            browser,
+                            last,
+                            ProcessRelationshipType.ChromiumSubprocess),
+                    ])),
+        ]);
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(results.Dequeue()),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.RefreshProcessesAsync();
+
+        ProcessTreeItemViewModel browserItem =
+            Assert.Single(viewModel.ProcessRoots);
+        Assert.Equal(
+            ["new.exe", "first.exe", "exited.exe", "last.exe"],
+            browserItem.Children.Select(item => item.ImageName));
+        Assert.True(browserItem.Children[2].IsStale);
+    }
+
+    [Fact]
+    public async Task RefreshPreservesExpandedParentAndSelectedStaleChild()
+    {
+        ProcessSnapshotEntry parent = CreateProcess(
+            123,
+            "sample.exe",
+            true);
+        ProcessSnapshotEntry child = CreateProcess(
+            456,
+            "sample.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        ChromiumDiscoveryResult initial = CreateDiscoveryResult(
+            [parent, child],
+            new ProcessGraph(
+                [parent, child],
+                [CreateEdge(
+                    parent,
+                    child,
+                    ProcessRelationshipType.ChromiumSubprocess)]));
+        int refreshCount = 0;
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                refreshCount++ == 0
+                    ? initial
+                    : CreateDiscoveryResult([], new ProcessGraph([], []))),
+            DiscoverDetails = (_, _) =>
+                ValueTask.FromResult(CreateDetails(child)),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+        await viewModel.RefreshProcessesAsync();
+        ProcessTreeItemViewModel visibleParent =
+            Assert.Single(viewModel.FilteredProcessRoots);
+        visibleParent.IsExpanded = true;
+        ProcessTreeItemViewModel visibleChild =
+            Assert.Single(visibleParent.Children);
+        await viewModel.SelectProcessAsync(visibleChild);
+
+        await viewModel.RefreshProcessesAsync();
+
+        ProcessTreeItemViewModel retainedParent =
+            Assert.Single(viewModel.FilteredProcessRoots);
+        ProcessTreeItemViewModel retainedChild =
+            Assert.Single(retainedParent.Children);
+        Assert.True(retainedParent.IsExpanded);
+        Assert.True(retainedParent.IsStale);
+        Assert.True(retainedChild.IsStale);
+        Assert.Equal(child.Identity(), viewModel.SelectedProcess?.Identity);
+        Assert.True(retainedChild.IsSelected);
     }
 
     [Fact]
@@ -419,37 +1004,22 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
-    public async Task AutoRefreshUsesMojoNameChangesAsLightweightTrigger()
+    public async Task AutoRefreshAppliesChangedLightProcessResult()
     {
-        ChromiumDiscoveryResult result = CreateDiscoveryResult(
+        ChromiumDiscoveryResult initial = CreateDiscoveryResult(
             [],
             new ProcessGraph([], []));
-        int processRefreshes = 0;
-        int pipeEnumerations = 0;
-        TaskCompletionSource refreshed = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "sample.exe",
+            true);
+        ChromiumDiscoveryResult changed = CreateDiscoveryResult(
+            [process],
+            new ProcessGraph([process], []));
         StubGuiDiscoveryService discovery = new()
         {
-            DiscoverProcesses = _ =>
-            {
-                processRefreshes++;
-                if (processRefreshes == 2)
-                {
-                    refreshed.SetResult();
-                }
-
-                return ValueTask.FromResult(result);
-            },
-            EnumerateMojoPipes = _ =>
-            {
-                pipeEnumerations++;
-                return ValueTask.FromResult(
-                    new MojoPipeEnumerationResult(
-                        pipeEnumerations == 1
-                            ? [new MojoPipeCandidate("mojo.changed", 123)]
-                            : [],
-                        []));
-            },
+            DiscoverProcesses = _ => ValueTask.FromResult(initial),
+            DiscoverLightProcesses = (_, _) => ValueTask.FromResult(changed),
         };
         using MainViewModel viewModel = new(
             discovery,
@@ -458,10 +1028,14 @@ public sealed class GuiViewModelTests
         await viewModel.RefreshProcessesAsync();
 
         viewModel.StartAutoRefresh();
-        await refreshed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitForAsync(
+            () => FlattenTree(viewModel.ProcessRoots)
+                .Any(item => item.Identity == process.Identity()));
         viewModel.StopAutoRefresh();
 
-        Assert.Equal(2, processRefreshes);
+        Assert.Contains(
+            FlattenTree(viewModel.ProcessRoots),
+            item => item.Identity == process.Identity());
     }
 
     [Fact]
@@ -553,6 +1127,73 @@ public sealed class GuiViewModelTests
         InstallationItemViewModel installation =
             Assert.Single(viewModel.FilteredInstallations);
         Assert.Equal("Razer Central", installation.Name);
+    }
+
+    [Fact]
+    public async Task CommandLineSuggestionsIncludeMatchingPsReadLineHistory()
+    {
+        ProcessSnapshotEntry process = CreateProcess(
+            123,
+            "chrome.exe",
+            true);
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [process],
+                    new ProcessGraph([process], []))),
+            DiscoverInstallations = _ => ValueTask.FromResult(
+                new InstallationDiscoveryResult(
+                    SnapshotTime,
+                    [
+                        CreateInstallation(
+                            "Google Chrome",
+                            "Chrome",
+                            @"C:\Program Files\Google\Chrome\Application",
+                            executableName: "chrome.exe"),
+                    ],
+                    new InstallationDiscoveryStatistics(
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        TimeSpan.Zero),
+                    [])),
+        };
+        StubCommandLineHistoryProvider history = new(
+            [
+                "chrome --history-only=one",
+                "chrome.exe --history-only=two",
+                "& 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' --history-only=three",
+                "notepad.exe --history-only=ignored",
+            ]);
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            commandLineHistoryProvider: history);
+
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.RefreshInstallationsAsync();
+        viewModel.CommandLineSuggestionFilter = "--history-only";
+        await Task.Delay(250);
+
+        Assert.Contains(
+            viewModel.FilteredCommandLineSuggestions,
+            suggestion => suggestion.Argument == "--history-only=one"
+                && suggestion.Origin == "PSReadLine history");
+        Assert.Contains(
+            viewModel.FilteredCommandLineSuggestions,
+            suggestion => suggestion.Argument == "--history-only=two");
+        Assert.Contains(
+            viewModel.FilteredCommandLineSuggestions,
+            suggestion => suggestion.Argument == "--history-only=three");
+        Assert.DoesNotContain(
+            viewModel.FilteredCommandLineSuggestions,
+            suggestion => suggestion.Argument == "--history-only=ignored");
     }
 
     [Fact]
@@ -772,19 +1413,23 @@ public sealed class GuiViewModelTests
             settings: new GuiSettings
             {
                 AutoRefreshProcesses = false,
+                AutoExtractFrameInfo = false,
                 DebugCommand = "debugger.exe {pid}",
             },
             settingsStore: settingsStore);
 
         Assert.False(viewModel.AutoRefreshProcesses);
+        Assert.False(viewModel.AutoExtractFrameInfo);
         Assert.Equal("debugger.exe {pid}", viewModel.DebugCommand);
 
         viewModel.AutoRefreshProcesses = true;
+        viewModel.AutoExtractFrameInfo = true;
         viewModel.AdditionalInstallationFoldersText =
             "C:\\Apps\r\nC:\\Tools\r\nC:\\Apps";
         await viewModel.RefreshInstallationsAsync();
 
         Assert.True(settingsStore.LastSaved?.AutoRefreshProcesses);
+        Assert.True(settingsStore.LastSaved?.AutoExtractFrameInfo);
         Assert.Equal(
             [@"C:\Apps", @"C:\Tools"],
             discovery.LastAdditionalInstallationFolders);
@@ -802,6 +1447,7 @@ public sealed class GuiViewModelTests
             GuiSettings expected = new()
             {
                 AutoRefreshProcesses = false,
+                AutoExtractFrameInfo = false,
                 DebugCommand = @"C:\Debuggers\windbgx.exe -p {pid}",
                 FutureDebuggerCommand = @"C:\Debuggers\windbgx.exe",
                 ProcessExplorerCommand = @"C:\Tools\procexp.exe /s:{pid}",
@@ -824,6 +1470,9 @@ public sealed class GuiViewModelTests
             Assert.Equal(
                 expected.AutoRefreshProcesses,
                 loaded.Settings.AutoRefreshProcesses);
+            Assert.Equal(
+                expected.AutoExtractFrameInfo,
+                loaded.Settings.AutoExtractFrameInfo);
             Assert.Equal(expected.DebugCommand, loaded.Settings.DebugCommand);
             Assert.Equal(
                 expected.FutureDebuggerCommand,
@@ -1042,6 +1691,110 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
+    public void CommandTemplateExpandsLaunchVariables()
+    {
+        string variableName = $"CPE_TEST_{Guid.NewGuid():N}";
+        Environment.SetEnvironmentVariable(variableName, @"C:\Profiles\Test");
+        try
+        {
+            CommandLineTemplateSettings template = new()
+            {
+                AddParts =
+                [
+                    $"--environment={{env:{variableName}}}",
+                    "--random={random-file}",
+                    "--random-again={random-file}",
+                    "--target={target-specific-file}",
+                    "--target-again={target-specific-file}",
+                    "--name={executable}",
+                    "--chromium-placeholder={pid}",
+                ],
+            };
+
+            IReadOnlyList<string> arguments =
+                CommandLineTemplateTransformer.Apply(
+                    "msedge.exe",
+                    template,
+                    @"C:\Program Files\Edge\msedge.exe");
+
+            Assert.Contains(
+                @"--environment=C:\Profiles\Test",
+                arguments);
+            string random = Assert.Single(
+                arguments,
+                argument => argument.StartsWith(
+                    "--random=",
+                    StringComparison.Ordinal))[9..];
+            Assert.Equal(
+                $"--random-again={random}",
+                Assert.Single(
+                    arguments,
+                    argument => argument.StartsWith(
+                        "--random-again=",
+                        StringComparison.Ordinal)));
+            Assert.Equal(Path.GetFileName(random), random);
+            string target = Assert.Single(
+                arguments,
+                argument => argument.StartsWith(
+                    "--target=",
+                    StringComparison.Ordinal))[9..];
+            Assert.Matches("^msedge-[0-9a-f]{8}$", target);
+            Assert.Contains($"--target-again={target}", arguments);
+            Assert.Contains("--name=msedge", arguments);
+            Assert.Contains("--chromium-placeholder={pid}", arguments);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, null);
+        }
+    }
+
+    [Fact]
+    public void CommandTemplateTargetSpecificFileIsStableForWindowsPathCasing()
+    {
+        CommandLineTemplateSettings template = new()
+        {
+            AddParts = ["--target={target-specific-file}"],
+        };
+
+        string first = Assert.Single(CommandLineTemplateTransformer.Apply(
+            "msedge.exe",
+            template,
+            @"C:\Program Files\Edge\msedge.exe"));
+        string second = Assert.Single(CommandLineTemplateTransformer.Apply(
+            "msedge.exe",
+            template,
+            @"c:\program files\edge\MSedge.EXE"));
+        string otherTarget = Assert.Single(
+            CommandLineTemplateTransformer.Apply(
+                "msedge.exe",
+                template,
+                @"C:\Other\Edge\msedge.exe"));
+
+        Assert.Equal(first, second);
+        Assert.NotEqual(first, otherTarget);
+    }
+
+    [Fact]
+    public void CommandTemplateRejectsUndefinedEnvironmentVariable()
+    {
+        string variableName = $"CPE_MISSING_{Guid.NewGuid():N}";
+        CommandLineTemplateSettings template = new()
+        {
+            AddParts = [$"--path={{env:{variableName}}}"],
+        };
+
+        InvalidOperationException exception = Assert.Throws<
+            InvalidOperationException>(() =>
+                CommandLineTemplateTransformer.Apply(
+                    "chrome.exe",
+                    template,
+                    @"C:\Chrome\chrome.exe"));
+
+        Assert.Contains(variableName, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NewSettingsIncludeRemoteDebuggingTemplate()
     {
         CommandLineTemplateSettings template =
@@ -1051,7 +1804,7 @@ public sealed class GuiViewModelTests
         Assert.True(template.IsFavorite);
         Assert.Equal(".*", template.ApplicableExecutableRegex);
         Assert.Contains(
-            "--remote-debugging-port=9222",
+            "--remote-debugging-port=0",
             template.AddParts);
         Assert.Contains(
             "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
@@ -1073,10 +1826,21 @@ public sealed class GuiViewModelTests
                   "CommandLineTemplates": [
                     {
                       "Id": "remote-debugging",
-                      "Name": "Enable remote debugging",
+                      "Name": "Legacy remote debugging",
                       "ApplicableExecutableRegex": ".*",
                       "IsFavorite": true,
                       "AddParts": [ "--remote-debugging-port=9222" ],
+                      "RemoveParts": []
+                    },
+                    {
+                      "Id": "remote-debugging",
+                      "Name": "Current remote debugging",
+                      "ApplicableExecutableRegex": ".*",
+                      "IsFavorite": true,
+                      "AddParts": [
+                        "--remote-debugging-port=9222",
+                        "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}"
+                      ],
                       "RemoveParts": []
                     }
                   ]
@@ -1085,12 +1849,17 @@ public sealed class GuiViewModelTests
 
             GuiSettingsLoadResult loaded =
                 new JsonGuiSettingsStore(settingsPath).Load();
-            CommandLineTemplateSettings template =
-                Assert.Single(loaded.Settings.CommandLineTemplates);
-
-            Assert.Contains(
-                "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
-                template.AddParts);
+            Assert.All(
+                loaded.Settings.CommandLineTemplates,
+                template =>
+                {
+                    Assert.Contains(
+                        "--remote-debugging-port=0",
+                        template.AddParts);
+                    Assert.Contains(
+                        "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
+                        template.AddParts);
+                });
         }
         finally
         {
@@ -1219,7 +1988,7 @@ public sealed class GuiViewModelTests
     }
 
     [Fact]
-    public async Task ProcessInternalsExtractionDisplaysMappedFrames()
+    public async Task FullRefreshAutomaticallyDisplaysMappedFrames()
     {
         ProcessSnapshotEntry process = CreateProcess(
             123,
@@ -1245,7 +2014,7 @@ public sealed class GuiViewModelTests
             "1.3",
             null,
             []);
-        int fingerprintReconciliations = 0;
+        int extractionCount = 0;
         StubGuiDiscoveryService discovery = new()
         {
             DiscoverProcesses = _ => ValueTask.FromResult(
@@ -1262,6 +2031,7 @@ public sealed class GuiViewModelTests
                         [transport]))),
             DiscoverProcessInternals = (_, imageName, _, _) =>
             {
+                extractionCount++;
                 Assert.Equal("msedge.exe", imageName);
                 return ValueTask.FromResult(
                     new CdpProcessInternalsResult(
@@ -1330,12 +2100,6 @@ public sealed class GuiViewModelTests
                         ],
                         []));
             },
-            EnumerateMojoPipes = _ =>
-            {
-                fingerprintReconciliations++;
-                return ValueTask.FromResult(
-                    new MojoPipeEnumerationResult([], []));
-            },
         };
         using MainViewModel viewModel = new(
             discovery,
@@ -1347,11 +2111,7 @@ public sealed class GuiViewModelTests
             item => item.Identity == renderer.Identity());
         await viewModel.SelectDevToolsAsync(Assert.Single(viewModel.DevTools));
         await viewModel.SelectProcessAsync(rendererItem);
-        await viewModel.ExtractProcessInternalsAsync();
 
-        ProcessInternalsFrameViewModel frame =
-            viewModel.ProcessInternalsFrames[0];
-        Assert.Equal("456 (internal 7)", frame.Process);
         Assert.Equal(
             ["https://accounts.example.test", "https://example.test"],
             rendererItem.Origins);
@@ -1359,6 +2119,16 @@ public sealed class GuiViewModelTests
             "wrong-generation",
             rendererItem.OriginSummary,
             StringComparison.Ordinal);
+        Assert.Equal(3, rendererItem.Frames.Count);
+        Assert.Equal(3, rendererItem.TreeChildren.Count);
+        Assert.Equal(
+            "Tab",
+            Assert.IsType<ProcessFrameTreeItemViewModel>(
+                rendererItem.TreeChildren[0]).Kind);
+        Assert.Equal(
+            "Frame",
+            Assert.IsType<ProcessFrameTreeItemViewModel>(
+                rendererItem.TreeChildren[1]).Kind);
         Assert.Equal(2, viewModel.ProcessInspector?.Origins.Count);
         Assert.Contains(
             viewModel.ProcessInspector!.Origins,
@@ -1369,10 +2139,10 @@ public sealed class GuiViewModelTests
             row => row.Label == "Subframe origin"
                 && row.Value == "https://accounts.example.test");
         Assert.Contains(
-            "without opening a visible tab",
+            "Extracted 4 frames",
             viewModel.DevToolsActionStatus,
             StringComparison.Ordinal);
-        Assert.True(fingerprintReconciliations > 0);
+        Assert.Equal(1, extractionCount);
 
         viewModel.ProcessFilter = "origin:accounts.example.test";
         Assert.Single(
@@ -1383,26 +2153,37 @@ public sealed class GuiViewModelTests
         await viewModel.RefreshProcessesAsync();
         await viewModel.SelectDevToolsAsync(Assert.Single(viewModel.DevTools));
 
-        Assert.Equal(4, viewModel.ProcessInternalsFrames.Count);
+        Assert.Equal(2, extractionCount);
         Assert.Equal(
             2,
             Assert.Single(
                 FlattenTree(viewModel.ProcessRoots),
                 item => item.Identity == renderer.Identity()).Origins.Count);
         Assert.Contains(
-            "without opening a visible tab",
+            "Extracted 4 frames",
             viewModel.DevToolsActionStatus,
             StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task ProcessInternalsTransientPipesDoNotTriggerAutoRefresh()
+    public async Task LightRefreshExtractsOnlyCreatedOrTerminatedProcessGroups()
     {
-        ProcessSnapshotEntry process = CreateProcess(
+        ProcessSnapshotEntry firstBrowser = CreateProcess(
             123,
             "chrome.exe",
             true);
-        CdpTransportInfo transport = new(
+        ProcessSnapshotEntry firstRenderer = CreateProcess(
+            124,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        ProcessSnapshotEntry secondBrowser = CreateProcess(
+            200,
+            "msedge.exe",
+            true);
+        CdpTransportInfo firstTransport = new(
             123,
             CdpTransportKind.Tcp,
             CdpTransportStatus.Validated,
@@ -1415,33 +2196,58 @@ public sealed class GuiViewModelTests
             "1.3",
             null,
             []);
-        int processRefreshes = 0;
-        int pipeEnumerations = 0;
-        TaskCompletionSource<CdpProcessInternalsResult> extraction =
+        CdpTransportInfo secondTransport = firstTransport with
+        {
+            ProcessId = 200,
+            ConfiguredValue = "9333",
+            Port = 9333,
+            VersionEndpoint = "http://127.0.0.1:9333/json/version",
+            WebSocketDebuggerUrl =
+                "ws://127.0.0.1:9333/devtools/browser/test",
+            Browser = "Edg/140.0",
+        };
+        ChromiumDiscoveryResult initial = CreateDiscoveryResult(
+            [firstBrowser, secondBrowser],
+            new ProcessGraph([firstBrowser, secondBrowser], []),
+            cdp: new CdpDiscoveryResult(
+                SnapshotTime,
+                [firstTransport, secondTransport]));
+        ChromiumDiscoveryResult changed = CreateDiscoveryResult(
+            [firstBrowser, firstRenderer, secondBrowser],
+            new ProcessGraph(
+                [firstBrowser, firstRenderer, secondBrowser],
+                [CreateEdge(
+                    firstBrowser,
+                    firstRenderer,
+                    ProcessRelationshipType.ChromiumSubprocess)]),
+            cdp: new CdpDiscoveryResult(
+                SnapshotTime,
+                [firstTransport, secondTransport]));
+        int lightRefreshCount = 0;
+        List<int> extractedProcessIds = [];
+        TaskCompletionSource lightExtraction =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         StubGuiDiscoveryService discovery = new()
         {
-            DiscoverProcesses = _ =>
+            DiscoverProcesses = _ => ValueTask.FromResult(initial),
+            DiscoverLightProcesses = (_, _) => ValueTask.FromResult(
+                Interlocked.Increment(ref lightRefreshCount) == 1
+                    ? changed
+                    : initial),
+            DiscoverProcessInternals = (transport, _, _, _) =>
             {
-                processRefreshes++;
+                extractedProcessIds.Add(transport.ProcessId);
+                if (extractedProcessIds.Count == 4)
+                {
+                    lightExtraction.TrySetResult();
+                }
+
                 return ValueTask.FromResult(
-                    CreateDiscoveryResult(
-                        [process],
-                        new ProcessGraph([process], []),
-                        cdp: new CdpDiscoveryResult(
-                            SnapshotTime,
-                            [transport])));
-            },
-            DiscoverProcessInternals = (_, _, _, _) =>
-                new ValueTask<CdpProcessInternalsResult>(extraction.Task),
-            EnumerateMojoPipes = _ =>
-            {
-                pipeEnumerations++;
-                return ValueTask.FromResult(
-                    new MojoPipeEnumerationResult(
-                        pipeEnumerations == 1
-                            ? [new MojoPipeCandidate("temporary.hidden", 456)]
-                            : [],
+                    new CdpProcessInternalsResult(
+                        SnapshotTime,
+                        transport.ProcessId,
+                        "chrome://process-internals/",
+                        [],
                         []));
             },
         };
@@ -1450,23 +2256,190 @@ public sealed class GuiViewModelTests
             new StubIconProvider(),
             TimeSpan.FromMilliseconds(10));
         await viewModel.RefreshProcessesAsync();
-        await viewModel.SelectDevToolsAsync(Assert.Single(viewModel.DevTools));
 
-        Task extractionTask = viewModel.ExtractProcessInternalsAsync();
         viewModel.StartAutoRefresh();
-        await Task.Delay(50);
-        extraction.SetResult(new CdpProcessInternalsResult(
-            SnapshotTime,
-            123,
-            "chrome://process-internals/",
-            [],
-            []));
-        await extractionTask;
-        await Task.Delay(100);
+        await lightExtraction.Task.WaitAsync(TimeSpan.FromSeconds(3));
         viewModel.StopAutoRefresh();
 
-        Assert.Equal(1, processRefreshes);
-        Assert.True(pipeEnumerations >= 2);
+        Assert.Equal([123, 200, 123, 123], extractedProcessIds);
+    }
+
+    [Fact]
+    public async Task DisablingAutomaticFrameExtractionClearsCachedData()
+    {
+        ProcessSnapshotEntry browser = CreateProcess(123, "chrome.exe", true);
+        ProcessSnapshotEntry renderer = CreateProcess(
+            124,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        CdpTransportInfo transport = CreateValidatedTransport(browser.ProcessId);
+        RecordingSettingsStore settingsStore = new();
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [browser, renderer],
+                    new ProcessGraph(
+                        [browser, renderer],
+                        [CreateEdge(
+                            browser,
+                            renderer,
+                            ProcessRelationshipType.ChromiumSubprocess)]),
+                    cdp: new CdpDiscoveryResult(
+                        SnapshotTime,
+                        [transport]))),
+            DiscoverProcessInternals = (_, _, _, _) => ValueTask.FromResult(
+                CreateProcessInternalsResult(
+                    browser.ProcessId,
+                    renderer,
+                    "https://example.test/")),
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider(),
+            settingsStore: settingsStore);
+
+        await viewModel.RefreshProcessesAsync();
+        ProcessTreeItemViewModel rendererItem = Assert.Single(
+            FlattenTree(viewModel.ProcessRoots),
+            item => item.Identity == renderer.Identity());
+        Assert.Single(rendererItem.Frames);
+
+        viewModel.AutoExtractFrameInfo = false;
+
+        Assert.Empty(rendererItem.Frames);
+        Assert.Empty(rendererItem.Origins);
+        Assert.False(settingsStore.LastSaved?.AutoExtractFrameInfo);
+    }
+
+    [Fact]
+    public async Task DisablingAutomaticFrameExtractionDiscardsInFlightResult()
+    {
+        ProcessSnapshotEntry browser = CreateProcess(123, "chrome.exe", true);
+        ProcessSnapshotEntry renderer = CreateProcess(
+            124,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        CdpTransportInfo transport = CreateValidatedTransport(browser.ProcessId);
+        TaskCompletionSource extractionStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<CdpProcessInternalsResult> extraction =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [browser, renderer],
+                    new ProcessGraph(
+                        [browser, renderer],
+                        [CreateEdge(
+                            browser,
+                            renderer,
+                            ProcessRelationshipType.ChromiumSubprocess)]),
+                    cdp: new CdpDiscoveryResult(
+                        SnapshotTime,
+                        [transport]))),
+            DiscoverProcessInternals = (_, _, _, _) =>
+            {
+                extractionStarted.SetResult();
+                return new ValueTask<CdpProcessInternalsResult>(extraction.Task);
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        Task refresh = viewModel.RefreshProcessesAsync();
+        await extractionStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        viewModel.AutoExtractFrameInfo = false;
+        extraction.SetResult(CreateProcessInternalsResult(
+            browser.ProcessId,
+            renderer,
+            "https://example.test/"));
+        await refresh;
+
+        ProcessTreeItemViewModel rendererItem = Assert.Single(
+            FlattenTree(viewModel.ProcessRoots),
+            item => item.Identity == renderer.Identity());
+        Assert.Empty(rendererItem.Frames);
+        Assert.Empty(rendererItem.Origins);
+    }
+
+    [Fact]
+    public async Task AutomaticFrameExtractionFailureRetainsLastSuccessfulData()
+    {
+        ProcessSnapshotEntry browser = CreateProcess(123, "chrome.exe", true);
+        ProcessSnapshotEntry renderer = CreateProcess(
+            124,
+            "chrome.exe",
+            true) with
+        {
+            ChromiumProcessType = "renderer",
+        };
+        CdpTransportInfo transport = CreateValidatedTransport(browser.ProcessId);
+        int extractionCount = 0;
+        StubGuiDiscoveryService discovery = new()
+        {
+            DiscoverProcesses = _ => ValueTask.FromResult(
+                CreateDiscoveryResult(
+                    [browser, renderer],
+                    new ProcessGraph(
+                        [browser, renderer],
+                        [CreateEdge(
+                            browser,
+                            renderer,
+                            ProcessRelationshipType.ChromiumSubprocess)]),
+                    cdp: new CdpDiscoveryResult(
+                        SnapshotTime,
+                        [transport]))),
+            DiscoverProcessInternals = (_, _, _, _) =>
+            {
+                extractionCount++;
+                if (extractionCount == 2)
+                {
+                    return ValueTask.FromResult(
+                        new CdpProcessInternalsResult(
+                            SnapshotTime,
+                            browser.ProcessId,
+                            "chrome://process-internals/",
+                            [],
+                            [
+                                new DiscoveryIssue(
+                                    "cdp-process-internals",
+                                    "Synthetic extraction failure.",
+                                    browser.ProcessId),
+                            ]));
+                }
+
+                return ValueTask.FromResult(
+                    CreateProcessInternalsResult(
+                        browser.ProcessId,
+                        renderer,
+                        "https://example.test/"));
+            },
+        };
+        using MainViewModel viewModel = new(
+            discovery,
+            new StubIconProvider());
+
+        await viewModel.RefreshProcessesAsync();
+        await viewModel.RefreshProcessesAsync();
+
+        ProcessTreeItemViewModel rendererItem = Assert.Single(
+            FlattenTree(viewModel.ProcessRoots),
+            item => item.Identity == renderer.Identity());
+        Assert.Single(rendererItem.Frames);
+        Assert.Contains(
+            viewModel.DevToolsNotices,
+            issue => issue.Message.Contains(
+                "Synthetic extraction failure",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1599,7 +2572,7 @@ public sealed class GuiViewModelTests
         Assert.Equal(chrome.ExecutablePath, externalTools.Launch?.Executable);
         Assert.Same(chromeTarget, viewModel.SelectedCommandLineRunTarget);
         Assert.Contains(
-            "--remote-debugging-port=9222",
+            "--remote-debugging-port=0",
             externalTools.Launch?.Arguments ?? []);
     }
 
@@ -1667,7 +2640,10 @@ public sealed class GuiViewModelTests
             new StubIconProvider());
 
         viewModel.CommandLineSuggestionFilter = "VulkanFromANGLE";
-        await Task.Delay(300);
+        await WaitForAsync(() =>
+            viewModel.FilteredCommandLineSuggestions.Count == 1
+            && viewModel.FilteredCommandLineSuggestions[0].Argument
+                == "--enable-features=VulkanFromANGLE");
 
         CommandLineSuggestionViewModel suggestion = Assert.Single(
             viewModel.FilteredCommandLineSuggestions);
@@ -1710,7 +2686,10 @@ public sealed class GuiViewModelTests
 
         await viewModel.RefreshProcessesAsync();
         viewModel.CommandLineSuggestionFilter = "custom-running-switch";
-        await Task.Delay(300);
+        await WaitForAsync(() =>
+            viewModel.FilteredCommandLineSuggestions.Count == 1
+            && viewModel.FilteredCommandLineSuggestions[0].Argument
+                == "--custom-running-switch=value");
 
         CommandLineSuggestionViewModel suggestion = Assert.Single(
             viewModel.FilteredCommandLineSuggestions);
@@ -1788,8 +2767,8 @@ public sealed class GuiViewModelTests
         Assert.Equal(
             [
                 "--profile-directory=Test",
-                "--remote-debugging-port=9222",
-                "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
+                "--remote-debugging-port=0",
+                "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\chrome",
             ],
             externalTools.Launch?.Arguments);
     }
@@ -2007,14 +2986,15 @@ public sealed class GuiViewModelTests
         string kind = "Application",
         string version = "1.0",
         bool? isSharedRuntime = false,
-        string? channel = null)
+        string? channel = null,
+        string? executableName = null)
     {
         return new ChromiumInstallation(
             name,
             kind,
             platform,
             path,
-            Path.Combine(path, $"{name}.exe"),
+            Path.Combine(path, executableName ?? $"{name}.exe"),
             version,
             channel,
             new InstallationMetadata(
@@ -2048,6 +3028,51 @@ public sealed class GuiViewModelTests
                 {
                     ["reason"] = "test association",
                 }));
+    }
+
+    private static CdpTransportInfo CreateValidatedTransport(int processId)
+    {
+        return new CdpTransportInfo(
+            processId,
+            CdpTransportKind.Tcp,
+            CdpTransportStatus.Validated,
+            "9222",
+            9222,
+            "command-line",
+            "http://127.0.0.1:9222/json/version",
+            "ws://127.0.0.1:9222/devtools/browser/test",
+            "Chrome/140.0",
+            "1.3",
+            null,
+            []);
+    }
+
+    private static CdpProcessInternalsResult CreateProcessInternalsResult(
+        int browserProcessId,
+        ProcessSnapshotEntry renderer,
+        string url)
+    {
+        return new CdpProcessInternalsResult(
+            SnapshotTime,
+            browserProcessId,
+            "chrome://process-internals/",
+            [
+                new CdpProcessInternalsFrame(
+                    "Example",
+                    0,
+                    7,
+                    12,
+                    3,
+                    renderer.Identity(),
+                    "Active",
+                    url,
+                    4,
+                    5,
+                    6,
+                    url,
+                    null),
+            ],
+            []);
     }
 
     private static ProcessTreeItemViewModel CreateTreeItem(
@@ -2122,6 +3147,18 @@ public sealed class GuiViewModelTests
             CancellationToken cancellationToken)
         {
             return ValueTask.FromResult<ImageSource?>(null);
+        }
+    }
+
+    private sealed class DelegatingIconProvider(
+        Func<string?, CancellationToken, ValueTask<ImageSource?>> getIcon)
+        : IProcessIconProvider
+    {
+        public ValueTask<ImageSource?> GetIconAsync(
+            string? executablePath,
+            CancellationToken cancellationToken)
+        {
+            return getIcon(executablePath, cancellationToken);
         }
     }
 
@@ -2218,6 +3255,14 @@ public sealed class GuiViewModelTests
             _ => ValueTask.FromResult(
                 CreateDiscoveryResult([], new ProcessGraph([], [])));
 
+        public Func<
+            ChromiumDiscoveryResult,
+            CancellationToken,
+            ValueTask<ChromiumDiscoveryResult>>
+            DiscoverLightProcesses
+        { get; init; } =
+            (previous, _) => ValueTask.FromResult(previous);
+
         public Func<int, CancellationToken, ValueTask<ProcessDetailsResult>>
             DiscoverDetails
         { get; init; } =
@@ -2228,12 +3273,6 @@ public sealed class GuiViewModelTests
                     true,
                     [],
                     []));
-
-        public Func<CancellationToken, ValueTask<MojoPipeEnumerationResult>>
-            EnumerateMojoPipes
-        { get; init; } =
-            _ => ValueTask.FromResult(
-                new MojoPipeEnumerationResult([], []));
 
         public Func<CancellationToken, ValueTask<InstallationDiscoveryResult>>
             DiscoverInstallations
@@ -2289,17 +3328,18 @@ public sealed class GuiViewModelTests
             return DiscoverProcesses(cancellationToken);
         }
 
+        public ValueTask<ChromiumDiscoveryResult> DiscoverProcessesLightAsync(
+            ChromiumDiscoveryResult previous,
+            CancellationToken cancellationToken)
+        {
+            return DiscoverLightProcesses(previous, cancellationToken);
+        }
+
         public ValueTask<ProcessDetailsResult> DiscoverProcessDetailsAsync(
             int processId,
             CancellationToken cancellationToken)
         {
             return DiscoverDetails(processId, cancellationToken);
-        }
-
-        public ValueTask<MojoPipeEnumerationResult> EnumerateMojoPipesAsync(
-            CancellationToken cancellationToken)
-        {
-            return EnumerateMojoPipes(cancellationToken);
         }
 
         public ValueTask<DiagnosticArtifactDiscoveryResult>
@@ -2351,6 +3391,17 @@ public sealed class GuiViewModelTests
                 imageName,
                 processes,
                 cancellationToken);
+        }
+
+    }
+
+    private sealed class StubCommandLineHistoryProvider(
+        IReadOnlyList<string> commandLines)
+        : ICommandLineHistoryProvider
+    {
+        public CommandLineHistoryResult Read()
+        {
+            return new CommandLineHistoryResult(commandLines, []);
         }
     }
 }

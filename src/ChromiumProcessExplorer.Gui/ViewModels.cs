@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Windows.Media;
 using ChromiumProcessExplorer.Core;
 using ChromiumProcessExplorer.Core.Discovery;
@@ -16,6 +18,7 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
     private bool _isSelected;
     private bool _isStale;
     private string[] _origins = [];
+    private ProcessFrameTreeItemViewModel[] _frames = [];
 
     public ProcessTreeItemViewModel(
         string branchKey,
@@ -28,7 +31,10 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
         Descriptor = descriptor;
         IsReference = isReference;
         _isStale = isStale;
-        Children = new ObservableCollection<ProcessTreeItemViewModel>(children);
+        ProcessTreeItemViewModel[] processChildren = children.ToArray();
+        Children = new ObservableCollection<ProcessTreeItemViewModel>(
+            processChildren);
+        TreeChildren = new ObservableCollection<object>(processChildren);
     }
 
     public string BranchKey { get; }
@@ -105,6 +111,10 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
 
     public ObservableCollection<ProcessTreeItemViewModel> Children { get; }
 
+    public ObservableCollection<object> TreeChildren { get; }
+
+    public IReadOnlyList<ProcessFrameTreeItemViewModel> Frames => _frames;
+
     public bool IsExpanded
     {
         get => _isExpanded;
@@ -136,6 +146,30 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
         OnPropertyChanged(nameof(OriginToolTip));
     }
 
+    public void SetFrames(IEnumerable<ProcessInternalsFrameViewModel> frames)
+    {
+        _frames = frames
+            .Select(frame => new ProcessFrameTreeItemViewModel(this, frame))
+            .ToArray();
+        RebuildTreeChildren();
+        OnPropertyChanged(nameof(Frames));
+    }
+
+    public void AddProcessChild(ProcessTreeItemViewModel child)
+    {
+        Children.Add(child);
+        TreeChildren.Insert(Children.Count - 1, child);
+    }
+
+    public void InsertProcessChild(
+        int index,
+        ProcessTreeItemViewModel child)
+    {
+        int insertionIndex = Math.Clamp(index, 0, Children.Count);
+        Children.Insert(insertionIndex, child);
+        TreeChildren.Insert(insertionIndex, child);
+    }
+
     public ProcessTreeItemViewModel CloneForRetention(
         IReadOnlySet<ProcessIdentity> currentIdentities)
     {
@@ -152,7 +186,22 @@ public sealed class ProcessTreeItemViewModel : ObservableObject
             IsSelected = IsSelected,
         };
         clone.SetOrigins(Origins);
+        clone.SetFrames(_frames.Select(frame => frame.Frame));
         return clone;
+    }
+
+    private void RebuildTreeChildren()
+    {
+        TreeChildren.Clear();
+        foreach (ProcessTreeItemViewModel child in Children)
+        {
+            TreeChildren.Add(child);
+        }
+
+        foreach (ProcessFrameTreeItemViewModel frame in _frames)
+        {
+            TreeChildren.Add(frame);
+        }
     }
 }
 
@@ -450,11 +499,38 @@ public sealed class ProcessInternalsFrameViewModel
         $"{Frame.SiteInstanceId} / group {Frame.SiteInstanceGroupId}";
 }
 
+public sealed class ProcessFrameTreeItemViewModel
+{
+    public ProcessFrameTreeItemViewModel(
+        ProcessTreeItemViewModel owner,
+        ProcessInternalsFrameViewModel frame)
+    {
+        Owner = owner;
+        Frame = frame;
+    }
+
+    public ProcessTreeItemViewModel Owner { get; }
+
+    public ProcessInternalsFrameViewModel Frame { get; }
+
+    public string Kind => Frame.Depth == 0 ? "Tab" : "Frame";
+
+    public string Title => string.IsNullOrWhiteSpace(Frame.Page)
+        ? "(untitled)"
+        : Frame.Page;
+
+    public string? Url => Frame.Url;
+
+    public string Lifecycle => Frame.Lifecycle;
+}
+
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private readonly IGuiDiscoveryService _discovery;
     private readonly IProcessIconProvider _iconProvider;
     private readonly IExternalToolService _externalTools;
+    private readonly ICommandLineHistoryProvider _commandLineHistoryProvider;
+    private readonly SemaphoreSlim _processDiscoveryGate = new(1, 1);
     private readonly IGuiSettingsStore? _settingsStore;
     private readonly string _productName = "Chromium Process Explorer";
     private readonly string _productVersion =
@@ -491,12 +567,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private CommandLineTemplateViewModel? _selectedCommandLineTemplate;
     private string _processFilter = string.Empty;
     private string _installationFilter = string.Empty;
-    private string? _mojoPipeFingerprint;
     private string _status = "Ready";
     private string _installationStatus = "Not scanned";
     private bool _autoRefreshProcesses = true;
+    private bool _autoExtractFrameInfo = true;
     private bool _areAllProcessNodesExpanded;
     private bool _isRefreshingProcesses;
+    private bool _isFullProcessRefreshQueued;
     private bool _isScanningInstallations;
     private bool _isLoadingSelection;
     private string _debugCommand;
@@ -514,6 +591,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isLoadingDevToolsTargets;
     private bool _isExtractingProcessInternals;
     private string _devToolsActionStatus = "Select a validated endpoint.";
+    private string? _commandLineHistoryIssue;
 
     public MainViewModel(
         IGuiDiscoveryService discovery,
@@ -522,15 +600,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         GuiSettings? settings = null,
         IGuiSettingsStore? settingsStore = null,
         IExternalToolService? externalTools = null,
+        ICommandLineHistoryProvider? commandLineHistoryProvider = null,
         string? settingsLoadError = null)
     {
         ArgumentNullException.ThrowIfNull(discovery);
         _discovery = discovery;
         _iconProvider = iconProvider ?? new WindowsProcessIconProvider();
         _externalTools = externalTools ?? new WindowsExternalToolService();
+        _commandLineHistoryProvider = commandLineHistoryProvider
+            ?? new PsReadLineCommandHistoryProvider();
         _settingsStore = settingsStore;
         GuiSettings initialSettings = settings ?? new GuiSettings();
         _autoRefreshProcesses = initialSettings.AutoRefreshProcesses;
+        _autoExtractFrameInfo = initialSettings.AutoExtractFrameInfo;
         _debugCommand = initialSettings.DebugCommand;
         _futureDebuggerCommand = initialSettings.FutureDebuggerCommand;
         _processExplorerCommand = initialSettings.ProcessExplorerCommand;
@@ -572,10 +654,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<DevToolsTargetViewModel> DevToolsTargets { get; } = [];
 
-    public ObservableCollection<ProcessInternalsFrameViewModel>
-        ProcessInternalsFrames
-    { get; } = [];
-
     public ObservableCollection<ContextIssueViewModel> ProcessNotices { get; } = [];
 
     public ObservableCollection<ContextIssueViewModel> InstallationNotices { get; } = [];
@@ -614,6 +692,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             {
                 value.IsSelected = true;
             }
+
+            OnPropertyChanged(nameof(CanRefreshProcessDetails));
         }
     }
 
@@ -636,7 +716,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (SetField(ref _selectedDevTools, value))
             {
-                OnPropertyChanged(nameof(CanExtractProcessInternals));
             }
         }
     }
@@ -674,7 +753,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (SetField(ref _isExtractingProcessInternals, value))
             {
-                OnPropertyChanged(nameof(CanExtractProcessInternals));
                 OnPropertyChanged(nameof(IsProcessActivityBusy));
             }
         }
@@ -693,10 +771,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public bool CanOpenRemoteDevTools =>
         !IsLoadingDevToolsTargets
         && SelectedDevToolsTarget?.CanOpenRemoteDevTools == true;
-
-    public bool CanExtractProcessInternals =>
-        !IsExtractingProcessInternals
-        && SelectedDevTools?.Transport.Status == CdpTransportStatus.Validated;
 
     public CommandLineTemplateViewModel? SelectedCommandLineTemplate
     {
@@ -822,6 +896,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (SetField(ref _isLoadingSelection, value))
             {
                 OnPropertyChanged(nameof(IsProcessActivityBusy));
+                OnPropertyChanged(nameof(CanRefreshProcessDetails));
             }
         }
     }
@@ -830,6 +905,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IsRefreshingProcesses
         || IsLoadingSelection
         || IsExtractingProcessInternals;
+
+    public bool CanRefreshProcessDetails =>
+        SelectedProcess is { IsStale: false }
+        && !IsLoadingSelection;
 
     public bool AutoRefreshProcesses
     {
@@ -840,6 +919,33 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             {
                 SaveSettings();
             }
+        }
+    }
+
+    public bool AutoExtractFrameInfo
+    {
+        get => _autoExtractFrameInfo;
+        set
+        {
+            if (!SetField(ref _autoExtractFrameInfo, value))
+            {
+                return;
+            }
+
+            if (!value)
+            {
+                _processInternalsCache.Clear();
+                ApplyCachedRendererOrigins();
+                DevToolsActionStatus =
+                    "Automatic renderer frame extraction is disabled.";
+            }
+            else
+            {
+                DevToolsActionStatus =
+                    "Renderer frame information will refresh with processes.";
+            }
+
+            SaveSettings();
         }
     }
 
@@ -1015,23 +1121,48 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public async Task RefreshProcessesAsync()
     {
-        if (IsRefreshingProcesses)
+        if (IsRefreshingProcesses || _isFullProcessRefreshQueued)
         {
             return;
         }
 
-        await RunRefreshAsync(
-            "Refreshing Chromium processes",
-            RefreshTarget.Processes,
-            async cancellationToken =>
+        if (!await _processDiscoveryGate.WaitAsync(0))
+        {
+            _isFullProcessRefreshQueued = true;
+            Status = "Full process refresh queued after the current light refresh.";
+            try
             {
-                ChromiumDiscoveryResult result =
-                    await _discovery.DiscoverProcessesAsync(cancellationToken);
-                await ApplyProcessResultAsync(result, cancellationToken);
-                Status = $"Found {result.ProcessGraph.Nodes.Count} captured processes; "
-                    + $"{Flatten(ProcessRoots).Count(item => !item.IsStale)} "
-                    + "Chromium and associated-host entries are displayed.";
-            });
+                await _processDiscoveryGate.WaitAsync();
+            }
+            finally
+            {
+                _isFullProcessRefreshQueued = false;
+            }
+        }
+
+        try
+        {
+            await RunRefreshAsync(
+                "Refreshing Chromium processes",
+                RefreshTarget.Processes,
+                async cancellationToken =>
+                {
+                    ChromiumDiscoveryResult result =
+                        await _discovery.DiscoverProcessesAsync(cancellationToken);
+                    await ApplyProcessResultAsync(
+                        result,
+                        ProcessInternalsRefreshMode.All,
+                        cancellationToken);
+                    Status = "Full process refresh complete; "
+                        + $"{result.ProcessGraph.Nodes.Count} captured processes; "
+                        + $"{Flatten(ProcessRoots).Count(item => !item.IsStale)} "
+                        + "Chromium and associated-host entries are displayed.";
+                });
+        }
+        finally
+        {
+            _processDiscoveryGate.Release();
+        }
     }
 
     public async Task RefreshInstallationsAsync()
@@ -1064,6 +1195,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     cancellationToken);
                 ApplyInstallationFilter(InstallationFilter);
                 UpdateCommandLineRunTargets();
+                RebuildCommandLineSuggestions(_processResult?.Processes ?? []);
                 Replace(
                     InstallationNotices,
                     result.Issues
@@ -1089,7 +1221,35 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public async Task SelectProcessAsync(ProcessTreeItemViewModel? process)
     {
+        await SelectProcessAsync(process, forceRefresh: false);
+    }
+
+    public async Task RefreshSelectedProcessDetailsAsync()
+    {
+        ProcessTreeItemViewModel? process = SelectedProcess;
+        if (process is null || process.IsStale || IsLoadingSelection)
+        {
+            return;
+        }
+
+        _diagnosticsResult = null;
+        _diagnosticsTask = null;
+        await SelectProcessAsync(process, forceRefresh: true);
+    }
+
+    private async Task SelectProcessAsync(
+        ProcessTreeItemViewModel? process,
+        bool forceRefresh)
+    {
+        if (process is null
+            && SelectedProcess is not null
+            && _processDiscoveryGate.CurrentCount == 0)
+        {
+            return;
+        }
+
         if (process is not null
+            && !forceRefresh
             && SelectedProcess?.Identity == process.Identity
             && ProcessInspector?.Identity == process.Identity)
         {
@@ -1108,11 +1268,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        ProcessInspector = BuildInspector(
-            process,
-            detail: null,
-            diagnostics: _diagnosticsResult,
-            isLoadingDiagnostics: !process.IsStale);
         if (process.IsStale)
         {
             if (_inspectorCache.TryGetValue(
@@ -1121,9 +1276,36 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             {
                 ProcessInspector = CreateStaleInspector(process, cached);
             }
+            else
+            {
+                ProcessInspector = BuildInspector(
+                    process,
+                    detail: null,
+                    diagnostics: _diagnosticsResult,
+                    isLoadingDiagnostics: false);
+            }
 
             Status = $"PID {process.ProcessId} exited; showing retained snapshot data.";
             return;
+        }
+
+        bool hasCachedInspector = _inspectorCache.TryGetValue(
+            process.Identity,
+            out ProcessInspectorViewModel? cachedInspector);
+        if (!forceRefresh && hasCachedInspector)
+        {
+            ProcessInspector = cachedInspector;
+            Status = $"Showing cached details for PID {process.ProcessId}.";
+            return;
+        }
+
+        if (!hasCachedInspector)
+        {
+            ProcessInspector = BuildInspector(
+                process,
+                detail: null,
+                diagnostics: _diagnosticsResult,
+                isLoadingDiagnostics: true);
         }
 
         CancellationTokenSource cancellation = new();
@@ -1146,12 +1328,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 item => item.Identity == process.Identity);
             if (detail is null)
             {
-                ProcessInspector = BuildInspector(
-                    process,
-                    null,
-                    _diagnosticsResult,
-                    isLoadingDiagnostics: false,
-                    additionalIssue: "The process exited or its PID was reused before details were captured.");
+                const string issue =
+                    "The process exited or its PID was reused before details "
+                    + "were captured.";
+                if (hasCachedInspector)
+                {
+                    ProcessInspector = cachedInspector;
+                    AddProcessActionIssue(issue);
+                }
+                else
+                {
+                    ProcessInspector = BuildInspector(
+                        process,
+                        null,
+                        _diagnosticsResult,
+                        isLoadingDiagnostics: false,
+                        additionalIssue: issue);
+                }
+
                 Status = $"PID {process.ProcessId} exited or was reused.";
                 return;
             }
@@ -1188,12 +1382,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            ProcessInspector = BuildInspector(
-                process,
-                null,
-                _diagnosticsResult,
-                isLoadingDiagnostics: false,
-                additionalIssue: exception.Message);
+            if (hasCachedInspector)
+            {
+                ProcessInspector = cachedInspector;
+                AddProcessActionIssue(
+                    $"Unable to refresh PID {process.ProcessId}: "
+                        + exception.Message);
+            }
+            else
+            {
+                ProcessInspector = BuildInspector(
+                    process,
+                    null,
+                    _diagnosticsResult,
+                    isLoadingDiagnostics: false,
+                    additionalIssue: exception.Message);
+            }
+
             Status = $"Unable to load PID {process.ProcessId}: {exception.Message}";
         }
         finally
@@ -1218,7 +1423,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         DevToolsTargets.Clear();
         if (item is null)
         {
-            ProcessInternalsFrames.Clear();
             DevToolsActionStatus = "Select a validated endpoint.";
             return;
         }
@@ -1226,14 +1430,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         bool hasCachedInternals = _processInternalsCache.TryGetValue(
             item.SelectionKey,
             out ProcessInternalsCacheEntry? cachedInternals);
-        if (hasCachedInternals)
+        if (hasCachedInternals && cachedInternals is not null)
         {
-            Replace(ProcessInternalsFrames, cachedInternals!.Frames);
             DevToolsActionStatus = cachedInternals.Status;
-        }
-        else
-        {
-            ProcessInternalsFrames.Clear();
         }
 
         ProcessTreeItemViewModel? process = Flatten(ProcessRoots)
@@ -1352,78 +1551,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             AddDevToolsIssue("cdp-open-remote-devtools", exception.Message);
             DevToolsActionStatus =
                 $"Unable to open remote DevTools: {exception.Message}";
-        }
-    }
-
-    public async Task ExtractProcessInternalsAsync()
-    {
-        DevToolsItemViewModel? endpoint = SelectedDevTools;
-        IReadOnlyList<ProcessSnapshotEntry>? processes =
-            _processResult?.Processes;
-        if (endpoint is null
-            || endpoint.Transport.Status != CdpTransportStatus.Validated
-            || processes is null)
-        {
-            return;
-        }
-
-        _devToolsCancellation?.Cancel();
-        _devToolsCancellation?.Dispose();
-        IsLoadingDevToolsTargets = false;
-        CancellationTokenSource cancellation = new();
-        _devToolsCancellation = cancellation;
-        IsExtractingProcessInternals = true;
-        ProcessInternalsFrames.Clear();
-        string? originalMojoFingerprint = _mojoPipeFingerprint;
-        DevToolsActionStatus =
-            $"Reading {endpoint.InternalPageScheme}://process-internals "
-                + "through a hidden target...";
-        try
-        {
-            CdpProcessInternalsResult result =
-                await _discovery.DiscoverProcessInternalsAsync(
-                    endpoint.Transport,
-                    endpoint.ImageName,
-                    processes,
-                    cancellation.Token);
-            if (!ReferenceEquals(_devToolsCancellation, cancellation))
-            {
-                return;
-            }
-
-            ProcessInternalsFrameViewModel[] frames = result.Frames
-                .Select(frame => new ProcessInternalsFrameViewModel(frame))
-                .ToArray();
-            Replace(ProcessInternalsFrames, frames);
-            AddDevToolsIssues(result.Issues);
-            DevToolsActionStatus = result.Frames.Count == 0
-                ? $"No frame data was returned by {result.InternalPageUrl}."
-                : $"Extracted {result.Frames.Count} frames from "
-                    + $"{result.InternalPageUrl} without opening a visible tab.";
-            _processInternalsCache[endpoint.SelectionKey] =
-                new ProcessInternalsCacheEntry(
-                    frames,
-                    DevToolsActionStatus);
-            ApplyCachedRendererOrigins();
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            AddDevToolsIssue("cdp-process-internals", exception.Message);
-            DevToolsActionStatus =
-                $"Unable to extract process internals: {exception.Message}";
-        }
-        finally
-        {
-            if (ReferenceEquals(_devToolsCancellation, cancellation))
-            {
-                await RestoreMojoFingerprintAsync(originalMojoFingerprint);
-                IsExtractingProcessInternals = false;
-                cancellation.Dispose();
-                _devToolsCancellation = null;
-            }
         }
     }
 
@@ -2056,10 +2183,53 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
         }
 
+        CommandLineHistoryResult history = _commandLineHistoryProvider.Read();
+        _commandLineHistoryIssue = history.Issues.Count == 0
+            ? null
+            : string.Join(" ", history.Issues);
+        foreach ((string argument, string executable) in
+            CommandLineHistoryMatcher.ExtractArguments(
+                history.CommandLines,
+                Installations.Select(installation =>
+                    installation.ExecutablePath)))
+        {
+            string historyDescription =
+                $"Previously used with {executable}.";
+            if (suggestions.TryGetValue(
+                argument,
+                out CommandLineSuggestionViewModel? existing))
+            {
+                suggestions[argument] = existing with
+                {
+                    Description = existing.Description.Contains(
+                        historyDescription,
+                        StringComparison.OrdinalIgnoreCase)
+                            ? existing.Description
+                            : $"{existing.Description} {historyDescription}",
+                    Origin = existing.Origin.Contains(
+                        "PSReadLine",
+                        StringComparison.OrdinalIgnoreCase)
+                            ? existing.Origin
+                            : $"{existing.Origin} + PSReadLine",
+                };
+            }
+            else
+            {
+                suggestions[argument] = new CommandLineSuggestionViewModel(
+                    "Observed",
+                    argument,
+                    historyDescription,
+                    "PSReadLine history");
+            }
+        }
+
         _commandLineSuggestions = suggestions.Values
             .OrderBy(
                 suggestion => suggestion.Origin == "Running processes"
                     || suggestion.Origin == "Catalog + running"
+                    || suggestion.Origin.Contains(
+                        "PSReadLine",
+                        StringComparison.OrdinalIgnoreCase)
                         ? 0
                         : 1)
             .ThenBy(
@@ -2207,7 +2377,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             FilteredCommandLineSuggestions.FirstOrDefault();
         CommandLineSuggestionStatus =
             $"Showing {matches.Length} of {_commandLineSuggestions.Length} "
-            + "documented and observed arguments.";
+            + "documented and observed arguments."
+            + (_commandLineHistoryIssue is null
+                ? string.Empty
+                : $" PSReadLine history issue: {_commandLineHistoryIssue}");
     }
 
     private string[] GetAdditionalInstallationFolders()
@@ -2239,6 +2412,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _settingsStore.Save(new GuiSettings
             {
                 AutoRefreshProcesses = AutoRefreshProcesses,
+                AutoExtractFrameInfo = AutoExtractFrameInfo,
                 DebugCommand = DebugCommand,
                 FutureDebuggerCommand = FutureDebuggerCommand,
                 ProcessExplorerCommand = ProcessExplorerCommand,
@@ -2337,7 +2511,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IReadOnlyList<string> arguments =
                 CommandLineTemplateTransformer.Apply(
                     commandLine,
-                    template.ToSettings());
+                    template.ToSettings(),
+                    executablePath);
             _externalTools.LaunchExecutable(executablePath, arguments);
             reportSuccess(
                 $"Launched {Path.GetFileName(executablePath)} with "
@@ -2357,24 +2532,39 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private async Task ApplyProcessResultAsync(
         ChromiumDiscoveryResult result,
+        ProcessInternalsRefreshMode processInternalsRefreshMode,
         CancellationToken cancellationToken)
     {
-        ProcessIdentity? selectedIdentity = SelectedProcess?.Identity;
         string? selectedDevToolsKey = SelectedDevTools?.SelectionKey;
-        ProcessTreeItemViewModel[] previousRoots = ProcessRoots.ToArray();
         ProcessPresentationTree presentation =
             ProcessPresentationTreeBuilder.Build(result);
         List<ProcessTreeItemViewModel> currentRoots = presentation.Roots
             .Select(CreateTreeItem)
             .ToList();
+
+        ApplyVisibleTreeStateToProcessRoots();
+        ProcessIdentity? selectedIdentity = SelectedProcess?.Identity;
+        ProcessTreeItemViewModel[] previousRoots = ProcessRoots.ToArray();
+        ApplyPreviousTreeState(previousRoots, currentRoots);
         IReadOnlySet<ProcessIdentity> currentIdentities =
             presentation.Processes.Keys.ToHashSet();
         MergeNewlyExited(previousRoots, currentRoots, currentIdentities);
         Replace(ProcessRoots, currentRoots);
+        ApplyCachedRendererOrigins(updateFilter: false);
+        UpdateFilteredProcessRoots();
+        RestoreSelectedProcessAfterTreeUpdate(selectedIdentity);
+        HashSet<ProcessIdentity> displayedIdentities = Flatten(ProcessRoots)
+            .Select(item => item.Identity)
+            .ToHashSet();
+        foreach (ProcessIdentity staleIdentity in _inspectorCache.Keys
+            .Where(identity => !displayedIdentities.Contains(identity))
+            .ToArray())
+        {
+            _inspectorCache.Remove(staleIdentity);
+        }
+
         _processResult = result;
         RebuildCommandLineSuggestions(result.Processes);
-        _mojoPipeFingerprint = CreateMojoFingerprint(
-            result.MojoPipeInspection.Pipes.Select(pipe => pipe.Name));
         _diagnosticsResult = null;
         _diagnosticsTask = null;
         await PopulateIconsAsync(ProcessRoots, cancellationToken);
@@ -2417,8 +2607,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             _processInternalsCache.Remove(staleKey);
         }
-        ApplyCachedRendererOrigins(updateFilter: false);
-        UpdateFilteredProcessRoots();
         Replace(
             DevToolsNotices,
             result.Cdp.Issues
@@ -2433,30 +2621,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 .DistinctBy(
                     issue => issue.Message,
                     StringComparer.OrdinalIgnoreCase));
+        if (AutoExtractFrameInfo)
+        {
+            await RefreshProcessInternalsAsync(
+                result,
+                processInternalsRefreshMode,
+                cancellationToken);
+        }
+        else
+        {
+            _processInternalsCache.Clear();
+        }
+
+        ApplyVisibleTreeStateToProcessRoots();
+        ApplyCachedRendererOrigins(updateFilter: false);
+        UpdateFilteredProcessRoots();
         SelectedDevTools = DevTools.FirstOrDefault(item =>
                 item.SelectionKey == selectedDevToolsKey)
             ?? DevTools.FirstOrDefault();
-
-        if (selectedIdentity is not null)
-        {
-            ProcessTreeItemViewModel? replacement = Flatten(FilteredProcessRoots)
-                .FirstOrDefault(item =>
-                    item.Identity == selectedIdentity);
-            SelectedProcess = replacement;
-            if (replacement is null)
-            {
-                ProcessInspector = null;
-            }
-            else if (replacement.IsStale
-                && _inspectorCache.TryGetValue(
-                    replacement.Identity,
-                    out ProcessInspectorViewModel? cached))
-            {
-                ProcessInspector = CreateStaleInspector(
-                    replacement,
-                    cached);
-            }
-        }
         RefreshSelectedProcessOrigins();
 
         ProcessTreeItemViewModel CreateTreeItem(ProcessPresentationBranch branch)
@@ -2467,6 +2649,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 branch.IsReference,
                 isStale: false,
                 branch.Children.Select(CreateTreeItem));
+        }
+    }
+
+    private void RestoreSelectedProcessAfterTreeUpdate(
+        ProcessIdentity? selectedIdentity)
+    {
+        if (selectedIdentity is null)
+        {
+            SelectedProcess = null;
+            ProcessInspector = null;
+            return;
+        }
+
+        ProcessTreeItemViewModel? replacement = Flatten(FilteredProcessRoots)
+            .FirstOrDefault(item => item.Identity == selectedIdentity);
+        SelectedProcess = replacement;
+        if (replacement is null)
+        {
+            ProcessInspector = null;
+        }
+        else if (replacement.IsStale
+            && _inspectorCache.TryGetValue(
+                replacement.Identity,
+                out ProcessInspectorViewModel? cached))
+        {
+            ProcessInspector = CreateStaleInspector(replacement, cached);
         }
     }
 
@@ -2577,10 +2785,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 children)
             {
                 Icon = item.Icon,
-                IsExpanded = filter.Length > 0 && children.Length > 0,
+                IsExpanded = filter.Length > 0
+                    ? children.Length > 0
+                    : item.IsExpanded,
                 IsSelected = item.Identity == selectedIdentity,
             };
             filtered.SetOrigins(item.Origins);
+            filtered.SetFrames(item.Frames.Select(frame => frame.Frame));
             return filtered;
         }
 
@@ -2712,27 +2923,44 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     continue;
                 }
 
-                MojoPipeEnumerationResult result =
-                    await _discovery.EnumerateMojoPipesAsync(cancellationToken);
-                string fingerprint = CreateMojoFingerprint(
-                    result.Pipes.Select(pipe => pipe.Name));
-                if (_mojoPipeFingerprint is null)
-                {
-                    _mojoPipeFingerprint = fingerprint;
-                    continue;
-                }
-
-                if (string.Equals(
-                    fingerprint,
-                    _mojoPipeFingerprint,
-                    StringComparison.Ordinal))
+                ChromiumDiscoveryResult? previous = _processResult;
+                if (previous is null)
                 {
                     continue;
                 }
 
-                _mojoPipeFingerprint = fingerprint;
-                Status = "Process changes detected; refreshing.";
-                await RefreshProcessesAsync();
+                if (!await _processDiscoveryGate.WaitAsync(
+                    0,
+                    cancellationToken))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ChromiumDiscoveryResult result =
+                        await _discovery.DiscoverProcessesLightAsync(
+                            previous,
+                            cancellationToken);
+                    if (ReferenceEquals(result, previous))
+                    {
+                        continue;
+                    }
+
+                    Status = "Process changes detected; applying a light refresh.";
+                    await ApplyProcessResultAsync(
+                        result,
+                        ProcessInternalsRefreshMode.ChangedGroups,
+                        cancellationToken);
+                    Status = "Process changes applied using cached details; "
+                        + $"{result.ProcessGraph.Nodes.Count} captured processes; "
+                        + $"{Flatten(ProcessRoots).Count(item => !item.IsStale)} "
+                        + "Chromium and associated-host entries are displayed.";
+                }
+                finally
+                {
+                    _processDiscoveryGate.Release();
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -2746,51 +2974,215 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RestoreMojoFingerprintAsync(
-        string? expectedFingerprint)
+    private async Task RefreshProcessInternalsAsync(
+        ChromiumDiscoveryResult result,
+        ProcessInternalsRefreshMode refreshMode,
+        CancellationToken cancellationToken)
     {
-        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(2));
-        try
+        DevToolsItemViewModel[] endpoints = DevTools
+            .Where(endpoint =>
+                endpoint.Transport.Status == CdpTransportStatus.Validated)
+            .ToArray();
+        List<(DevToolsItemViewModel Endpoint, HashSet<ProcessIdentity> Members)>
+            pending = [];
+        foreach (DevToolsItemViewModel endpoint in endpoints)
         {
-            for (int attempt = 0; attempt < 8; attempt++)
+            HashSet<ProcessIdentity> members =
+                GetProcessGroupIdentities(result, endpoint);
+            bool hasCachedEntry = _processInternalsCache.TryGetValue(
+                endpoint.SelectionKey,
+                out ProcessInternalsCacheEntry? cachedEntry);
+            bool groupChanged = !hasCachedEntry
+                || !cachedEntry!.GroupMembers.SetEquals(members);
+            if (refreshMode == ProcessInternalsRefreshMode.All || groupChanged)
             {
-                MojoPipeEnumerationResult result =
-                    await _discovery.EnumerateMojoPipesAsync(timeout.Token);
-                string fingerprint = CreateMojoFingerprint(
-                    result.Pipes.Select(pipe => pipe.Name));
-                if (expectedFingerprint is null
-                    || string.Equals(
-                        fingerprint,
-                        expectedFingerprint,
-                        StringComparison.Ordinal))
-                {
-                    _mojoPipeFingerprint = fingerprint;
-                    return;
-                }
-
-                await Task.Delay(
-                    TimeSpan.FromMilliseconds(250),
-                    timeout.Token);
+                pending.Add((endpoint, members));
             }
         }
 
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        if (pending.Count == 0)
         {
+            DevToolsActionStatus = endpoints.Length == 0
+                ? "No validated TCP endpoint is available for frame extraction."
+                : "Renderer frame information is current.";
+            return;
         }
-        catch (Exception exception)
+
+        IsExtractingProcessInternals = true;
+        int refreshedCount = 0;
+        try
         {
-            AddDevToolsIssue(
-                "cdp-process-internals-refresh",
-                "Unable to reconcile process auto-refresh after the hidden "
-                    + $"diagnostic target closed: {exception.Message}");
+            foreach ((DevToolsItemViewModel endpoint,
+                HashSet<ProcessIdentity> members) in pending)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                DevToolsActionStatus =
+                    $"Reading {endpoint.InternalPageScheme}://process-internals "
+                        + $"for {endpoint.ProcessLabel}...";
+                try
+                {
+                    CdpProcessInternalsResult internals =
+                        await _discovery.DiscoverProcessInternalsAsync(
+                            endpoint.Transport,
+                            endpoint.ImageName,
+                            result.Processes,
+                            cancellationToken);
+                    if (!AutoExtractFrameInfo)
+                    {
+                        _processInternalsCache.Clear();
+                        return;
+                    }
+
+                    ProcessInternalsFrameViewModel[] frames = internals.Frames
+                        .Select(frame => new ProcessInternalsFrameViewModel(frame))
+                        .ToArray();
+                    AddDevToolsIssues(internals.Issues);
+                    if (frames.Length == 0 && internals.Issues.Count > 0)
+                    {
+                        ProcessInternalsFrameViewModel[] retainedFrames =
+                            _processInternalsCache.TryGetValue(
+                                endpoint.SelectionKey,
+                                out ProcessInternalsCacheEntry? retained)
+                                ? retained.Frames.ToArray()
+                                : [];
+                        _processInternalsCache[endpoint.SelectionKey] =
+                            new ProcessInternalsCacheEntry(
+                                retainedFrames,
+                                $"Unable to refresh frame information for "
+                                    + $"{endpoint.ProcessLabel}; retained the "
+                                    + "last successful data.",
+                                members);
+                        continue;
+                    }
+
+                    string status = internals.Frames.Count == 0
+                        ? $"No frame data was returned by "
+                            + $"{internals.InternalPageUrl} for "
+                            + $"{endpoint.ProcessLabel}."
+                        : $"Extracted {internals.Frames.Count} frames from "
+                            + $"{internals.InternalPageUrl} for "
+                            + $"{endpoint.ProcessLabel}.";
+                    _processInternalsCache[endpoint.SelectionKey] =
+                        new ProcessInternalsCacheEntry(
+                            frames,
+                            status,
+                            members);
+                    refreshedCount++;
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception) when (
+                    exception is IOException
+                        or InvalidOperationException
+                        or JsonException
+                        or WebSocketException)
+                {
+                    AddDevToolsIssue(
+                        "cdp-process-internals",
+                        $"Unable to refresh frame information for "
+                            + $"{endpoint.ProcessLabel}: {exception.Message}");
+                    ProcessInternalsFrameViewModel[] retainedFrames =
+                        _processInternalsCache.TryGetValue(
+                            endpoint.SelectionKey,
+                            out ProcessInternalsCacheEntry? retained)
+                            ? retained.Frames.ToArray()
+                            : [];
+                    _processInternalsCache[endpoint.SelectionKey] =
+                        new ProcessInternalsCacheEntry(
+                            retainedFrames,
+                            $"Unable to refresh frame information for "
+                                + $"{endpoint.ProcessLabel}; retained the last "
+                                + $"successful data. {exception.Message}",
+                            members);
+                }
+            }
         }
+        finally
+        {
+            IsExtractingProcessInternals = false;
+        }
+
+        if (!AutoExtractFrameInfo)
+        {
+            _processInternalsCache.Clear();
+            DevToolsActionStatus =
+                "Automatic renderer frame extraction is disabled.";
+            return;
+        }
+
+        DevToolsActionStatus = refreshedCount == pending.Count
+            ? $"Renderer frame information refreshed for "
+                + $"{refreshedCount} process "
+                + $"{(refreshedCount == 1 ? "group" : "groups")}."
+            : $"Renderer frame information refreshed for {refreshedCount} of "
+                + $"{pending.Count} process groups; previous data was retained "
+                + "where refresh failed.";
+    }
+
+    private static HashSet<ProcessIdentity> GetProcessGroupIdentities(
+        ChromiumDiscoveryResult result,
+        DevToolsItemViewModel endpoint)
+    {
+        ProcessGraphNode? browser = result.ProcessGraph.FindNode(
+            new ProcessIdentity(
+                endpoint.ProcessId,
+                endpoint.ProcessCreationTime));
+        if (browser is null)
+        {
+            return new HashSet<ProcessIdentity>();
+        }
+
+        HashSet<ProcessIdentity> included = [browser.Identity];
+        Queue<ProcessIdentity> pending = new();
+        pending.Enqueue(browser.Identity);
+        while (pending.TryDequeue(out ProcessIdentity identity))
+        {
+            foreach (ProcessGraphEdge edge in
+                result.ProcessGraph.GetOutgoingEdges(identity))
+            {
+                bool include = edge.Type
+                    == ProcessRelationshipType.ChromiumSubprocess;
+                if (edge.Type == ProcessRelationshipType.OsParent)
+                {
+                    include = result.ProcessGraph.FindNode(edge.Target)?
+                        .Process.IsLikelyChromium == true;
+                }
+
+                if (include && included.Add(edge.Target))
+                {
+                    pending.Enqueue(edge.Target);
+                }
+            }
+
+            foreach (ProcessGraphEdge edge in
+                result.ProcessGraph.GetIncomingEdges(identity)
+                    .Where(edge =>
+                        edge.Type == ProcessRelationshipType.EmbeddedBy))
+            {
+                included.Add(edge.Source);
+            }
+        }
+
+        return included;
     }
 
     private void ApplyCachedRendererOrigins(bool updateFilter = true)
     {
-        Dictionary<ProcessIdentity, string[]> originsByProcess =
+        ProcessInternalsFrameViewModel[] cachedFrames =
             _processInternalsCache.Values
                 .SelectMany(entry => entry.Frames)
+                .DistinctBy(frame => (
+                    frame.Frame.Process,
+                    frame.Frame.InternalProcessId,
+                    frame.Frame.RoutingId,
+                    frame.Frame.Url,
+                    frame.Frame.Lifecycle))
+                .ToArray();
+        Dictionary<ProcessIdentity, string[]> originsByProcess =
+            cachedFrames
                 .Where(frame => frame.Frame.Process is not null)
                 .Select(frame => (
                     Process: frame.Frame.Process!.Value,
@@ -2805,10 +3197,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .Order(StringComparer.OrdinalIgnoreCase)
                         .ToArray());
+        ILookup<ProcessIdentity, ProcessInternalsFrameViewModel> framesByProcess =
+            cachedFrames
+                .Where(frame => frame.Frame.Process is not null)
+                .ToLookup(frame => frame.Frame.Process!.Value);
         foreach (ProcessTreeItemViewModel process in Flatten(ProcessRoots))
         {
             process.SetOrigins(
                 originsByProcess.GetValueOrDefault(process.Identity) ?? []);
+            process.SetFrames(framesByProcess[process.Identity]);
         }
 
         if (updateFilter)
@@ -2901,14 +3298,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return string.IsNullOrWhiteSpace(uri.Host)
             ? null
             : uri.GetLeftPart(UriPartial.Authority);
-    }
-
-    private static string CreateMojoFingerprint(IEnumerable<string> names)
-    {
-        return string.Join(
-            '\n',
-            names.Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase));
     }
 
     private static void SetExpanded(
@@ -3248,19 +3637,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     private static void MergeNewlyExited(
-        IReadOnlyList<ProcessTreeItemViewModel> previousRoots,
+        ProcessTreeItemViewModel[] previousRoots,
         List<ProcessTreeItemViewModel> currentRoots,
         IReadOnlySet<ProcessIdentity> currentIdentities)
     {
         Dictionary<string, ProcessTreeItemViewModel> currentByBranch =
             Flatten(currentRoots).ToDictionary(item => item.BranchKey);
-        foreach (ProcessTreeItemViewModel previousRoot in previousRoots)
+        for (int index = 0; index < previousRoots.Length; index++)
         {
-            Merge(previousRoot, null);
+            Merge(
+                previousRoots[index],
+                previousRoots,
+                index,
+                null);
         }
 
         void Merge(
             ProcessTreeItemViewModel previous,
+            IReadOnlyList<ProcessTreeItemViewModel> previousSiblings,
+            int previousIndex,
             ProcessTreeItemViewModel? currentParent)
         {
             if (previous.IsStale)
@@ -3274,11 +3669,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     previous.CloneForRetention(currentIdentities);
                 if (currentParent is null)
                 {
-                    currentRoots.Add(retained);
+                    int insertionIndex = FindInsertionIndex(
+                        currentRoots,
+                        previousSiblings,
+                        previousIndex);
+                    currentRoots.Insert(insertionIndex, retained);
                 }
                 else
                 {
-                    currentParent.Children.Add(retained);
+                    int insertionIndex = FindInsertionIndex(
+                        currentParent.Children,
+                        previousSiblings,
+                        previousIndex);
+                    currentParent.InsertProcessChild(
+                        insertionIndex,
+                        retained);
                 }
 
                 return;
@@ -3288,10 +3693,110 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 currentByBranch.GetValueOrDefault(previous.BranchKey)
                 ?? Flatten(currentRoots).FirstOrDefault(item =>
                     item.Identity == previous.Identity);
-            foreach (ProcessTreeItemViewModel child in previous.Children)
+            for (int index = 0; index < previous.Children.Count; index++)
             {
-                Merge(child, current);
+                Merge(
+                    previous.Children[index],
+                    previous.Children,
+                    index,
+                    current);
             }
+        }
+
+        static int FindInsertionIndex(
+            IReadOnlyList<ProcessTreeItemViewModel> currentSiblings,
+            IReadOnlyList<ProcessTreeItemViewModel> previousSiblings,
+            int previousIndex)
+        {
+            for (int index = previousIndex - 1; index >= 0; index--)
+            {
+                int currentIndex = FindSibling(
+                    currentSiblings,
+                    previousSiblings[index]);
+                if (currentIndex >= 0)
+                {
+                    return currentIndex + 1;
+                }
+            }
+
+            for (int index = previousIndex + 1;
+                index < previousSiblings.Count;
+                index++)
+            {
+                int currentIndex = FindSibling(
+                    currentSiblings,
+                    previousSiblings[index]);
+                if (currentIndex >= 0)
+                {
+                    return currentIndex;
+                }
+            }
+
+            return Math.Min(previousIndex, currentSiblings.Count);
+        }
+
+        static int FindSibling(
+            IReadOnlyList<ProcessTreeItemViewModel> siblings,
+            ProcessTreeItemViewModel previous)
+        {
+            for (int index = 0; index < siblings.Count; index++)
+            {
+                if (siblings[index].BranchKey == previous.BranchKey)
+                {
+                    return index;
+                }
+            }
+
+            for (int index = 0; index < siblings.Count; index++)
+            {
+                if (siblings[index].Identity == previous.Identity)
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+    }
+
+    private void ApplyVisibleTreeStateToProcessRoots()
+    {
+        Dictionary<string, ProcessTreeItemViewModel> visibleByBranch =
+            Flatten(FilteredProcessRoots)
+                .ToDictionary(item => item.BranchKey);
+        foreach (ProcessTreeItemViewModel process in Flatten(ProcessRoots))
+        {
+            if (visibleByBranch.TryGetValue(
+                process.BranchKey,
+                out ProcessTreeItemViewModel? visible))
+            {
+                process.IsExpanded = visible.IsExpanded;
+                process.IsSelected = visible.IsSelected;
+            }
+        }
+    }
+
+    private static void ApplyPreviousTreeState(
+        IReadOnlyList<ProcessTreeItemViewModel> previousRoots,
+        IReadOnlyList<ProcessTreeItemViewModel> currentRoots)
+    {
+        Dictionary<string, ProcessTreeItemViewModel> previousByBranch =
+            Flatten(previousRoots).ToDictionary(item => item.BranchKey);
+        ILookup<ProcessIdentity, ProcessTreeItemViewModel> previousByIdentity =
+            Flatten(previousRoots).ToLookup(item => item.Identity);
+        foreach (ProcessTreeItemViewModel current in Flatten(currentRoots))
+        {
+            ProcessTreeItemViewModel? previous =
+                previousByBranch.GetValueOrDefault(current.BranchKey)
+                ?? previousByIdentity[current.Identity].FirstOrDefault();
+            if (previous is null)
+            {
+                continue;
+            }
+
+            current.Icon = previous.Icon;
+            current.IsExpanded = previous.IsExpanded;
+            current.IsSelected = previous.IsSelected;
         }
     }
 
@@ -3452,7 +3957,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private sealed record ProcessInternalsCacheEntry(
         IReadOnlyList<ProcessInternalsFrameViewModel> Frames,
-        string Status);
+        string Status,
+        IReadOnlySet<ProcessIdentity> GroupMembers);
+
+    private enum ProcessInternalsRefreshMode
+    {
+        All,
+        ChangedGroups,
+    }
 
     private enum RefreshTarget
     {

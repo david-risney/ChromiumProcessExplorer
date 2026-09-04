@@ -137,15 +137,21 @@ public sealed class CdpBrowserToolsProvider
 
             CdpInspectableTarget[] targets = document.RootElement
                 .EnumerateArray()
-                .Select(target => new CdpInspectableTarget(
-                    GetString(target, "id") ?? string.Empty,
-                    GetString(target, "type") ?? string.Empty,
-                    GetString(target, "title") ?? string.Empty,
-                    GetString(target, "url") ?? string.Empty,
-                    ResolveFrontendUrl(
-                        transport.Port!.Value,
-                        GetString(target, "devtoolsFrontendUrl")),
-                    GetString(target, "webSocketDebuggerUrl")))
+                .Select(target =>
+                {
+                    string? webSocketDebuggerUrl =
+                        GetString(target, "webSocketDebuggerUrl");
+                    return new CdpInspectableTarget(
+                        GetString(target, "id") ?? string.Empty,
+                        GetString(target, "type") ?? string.Empty,
+                        GetString(target, "title") ?? string.Empty,
+                        GetString(target, "url") ?? string.Empty,
+                        ResolveFrontendUrl(
+                            transport.Port!.Value,
+                            webSocketDebuggerUrl,
+                            GetString(target, "devtoolsFrontendUrl")),
+                        webSocketDebuggerUrl);
+                })
                 .Where(target => !string.IsNullOrWhiteSpace(target.TargetId))
                 .ToArray();
             return new CdpTargetListResult(
@@ -367,20 +373,32 @@ public sealed class CdpBrowserToolsProvider
 
     private static string? ResolveFrontendUrl(
         int port,
-        string? value)
+        string? webSocketDebuggerUrl,
+        string? advertisedFrontendUrl)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (Uri.TryCreate(
+                webSocketDebuggerUrl,
+                UriKind.Absolute,
+                out Uri? webSocket)
+            && webSocket.Scheme is "ws" or "wss"
+            && webSocket.IsLoopback
+            && webSocket.Port == port)
+        {
+            string endpoint = $"127.0.0.1:{port}{webSocket.PathAndQuery}";
+            return $"http://127.0.0.1:{port}/devtools/inspector.html"
+                + $"?ws={endpoint}";
+        }
+
+        if (string.IsNullOrWhiteSpace(advertisedFrontendUrl))
         {
             return null;
         }
 
-        if (Uri.TryCreate(value, UriKind.Absolute, out Uri? absolute))
+        if (Uri.TryCreate(
+            advertisedFrontendUrl,
+            UriKind.Absolute,
+            out Uri? absolute))
         {
-            if (absolute.Scheme is "http" or "https")
-            {
-                return absolute.ToString();
-            }
-
             if (absolute.Scheme == "devtools")
             {
                 return $"http://127.0.0.1:{port}/devtools/inspector.html"
@@ -390,7 +408,7 @@ public sealed class CdpBrowserToolsProvider
 
         return new Uri(
             new Uri($"http://127.0.0.1:{port}", UriKind.Absolute),
-            value).ToString();
+            advertisedFrontendUrl).ToString();
     }
 
     private static string? GetString(JsonElement element, string property)

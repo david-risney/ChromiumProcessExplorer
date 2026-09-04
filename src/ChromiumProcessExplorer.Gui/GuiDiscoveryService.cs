@@ -7,7 +7,8 @@ public interface IGuiDiscoveryService
     ValueTask<ChromiumDiscoveryResult> DiscoverProcessesAsync(
         CancellationToken cancellationToken);
 
-    ValueTask<MojoPipeEnumerationResult> EnumerateMojoPipesAsync(
+    ValueTask<ChromiumDiscoveryResult> DiscoverProcessesLightAsync(
+        ChromiumDiscoveryResult previous,
         CancellationToken cancellationToken);
 
     ValueTask<ProcessDetailsResult> DiscoverProcessDetailsAsync(
@@ -60,10 +61,16 @@ public sealed class GuiDiscoveryService : IGuiDiscoveryService
             cancellationToken: cancellationToken);
     }
 
-    public ValueTask<MojoPipeEnumerationResult> EnumerateMojoPipesAsync(
+    public async ValueTask<ChromiumDiscoveryResult> DiscoverProcessesLightAsync(
+        ChromiumDiscoveryResult previous,
         CancellationToken cancellationToken)
     {
-        return _discovery.EnumerateMojoPipesAsync(cancellationToken);
+        return await _discovery.DiscoverIncrementalAsync(
+            previous,
+            new HandleQueryWorkerOptions(_workerPath, 0),
+            includeWindowEvidence: true,
+            maximumProcessConcurrency: null,
+            cancellationToken: cancellationToken);
     }
 
     public async ValueTask<ProcessDetailsResult> DiscoverProcessDetailsAsync(

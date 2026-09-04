@@ -7,6 +7,8 @@ public sealed record GuiSettings
 {
     public bool AutoRefreshProcesses { get; init; } = true;
 
+    public bool AutoExtractFrameInfo { get; init; } = true;
+
     public string DebugCommand { get; init; } = "windbgx.exe -p {pid}";
 
     public string FutureDebuggerCommand { get; init; } = "windbgx.exe";
@@ -161,12 +163,17 @@ public sealed class JsonGuiSettingsStore : IGuiSettingsStore
                 template.Id,
                 "remote-debugging",
                 StringComparison.Ordinal)
-            && addParts.Count == 1
+            && (template.RemoveParts?.Count ?? 0) == 0
+            && addParts.Count is 1 or 2
             && string.Equals(
                 addParts[0],
                 "--remote-debugging-port=9222",
                 StringComparison.OrdinalIgnoreCase)
-            && (template.RemoveParts?.Count ?? 0) == 0;
+            && (addParts.Count == 1
+                || string.Equals(
+                    addParts[1],
+                    "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
+                    StringComparison.OrdinalIgnoreCase));
     }
 
     private static string UseDefault(string? value, string fallback)

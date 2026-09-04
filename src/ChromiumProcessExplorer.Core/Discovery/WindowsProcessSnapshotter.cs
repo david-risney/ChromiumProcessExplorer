@@ -41,7 +41,42 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
         CancellationToken cancellationToken = default)
     {
         List<BasicProcessEntry> basicProcesses = CaptureBasicSnapshot();
+        return await EnrichAsync(
+            basicProcesses,
+            previousProcesses: [],
+            maximumConcurrency,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<IReadOnlyList<ProcessSnapshotEntry>>
+        CaptureIncrementalAsync(
+        IReadOnlyList<ProcessSnapshotEntry> previousProcesses,
+        int? maximumConcurrency = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(previousProcesses);
+        List<BasicProcessEntry> basicProcesses = CaptureBasicSnapshot();
+        return await EnrichAsync(
+            basicProcesses,
+            previousProcesses,
+            maximumConcurrency,
+            cancellationToken);
+    }
+
+    private static async ValueTask<IReadOnlyList<ProcessSnapshotEntry>> EnrichAsync(
+        IReadOnlyList<BasicProcessEntry> basicProcesses,
+        IReadOnlyList<ProcessSnapshotEntry> previousProcesses,
+        int? maximumConcurrency,
+        CancellationToken cancellationToken)
+    {
         ProcessSnapshotEntry[] results = new ProcessSnapshotEntry[basicProcesses.Count];
+        Dictionary<ProcessIdentity, ProcessSnapshotEntry> reusable =
+            previousProcesses
+                .Where(process => process.CreationTime is not null)
+                .ToDictionary(process => new ProcessIdentity(
+                    process.ProcessId,
+                    process.CreationTime));
 
         ParallelOptions options = new()
         {
@@ -56,7 +91,16 @@ public sealed partial class WindowsProcessSnapshotter : IProcessSnapshotProvider
             options,
             (index, _) =>
             {
-                results[index] = Enrich(basicProcesses[index]);
+                BasicProcessEntry basic = basicProcesses[index];
+                ProcessIdentity identity = new(
+                    basic.ProcessId,
+                    basic.CreationTime);
+                results[index] = basic.CreationTime is not null
+                    && reusable.TryGetValue(
+                        identity,
+                        out ProcessSnapshotEntry? previous)
+                            ? previous
+                            : Enrich(basic);
                 return ValueTask.CompletedTask;
             });
 

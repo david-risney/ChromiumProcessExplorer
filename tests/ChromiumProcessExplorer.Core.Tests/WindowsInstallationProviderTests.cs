@@ -57,6 +57,84 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task DiscoverDoesNotUseCreatedumpAsApplicationExecutable()
+    {
+        string applicationPath = Path.Combine(_root, "Tempo");
+        Directory.CreateDirectory(applicationPath);
+        File.WriteAllText(
+            Path.Combine(applicationPath, "WebView2Loader.dll"),
+            string.Empty);
+        File.WriteAllText(
+            Path.Combine(applicationPath, "createdump.exe"),
+            string.Empty);
+        string executablePath = Path.Combine(applicationPath, "Tempo.exe");
+        File.WriteAllText(executablePath, string.Empty);
+        WindowsInstallationProvider provider = CreateProvider();
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([])).Installations);
+
+        Assert.Equal(executablePath, installation.ExecutablePath);
+        Assert.NotEqual("Microsoft® .NET", installation.Name);
+    }
+
+    [Fact]
+    public async Task DiscoverFindsCefApplicationAboveBrowserSubprocess()
+    {
+        string applicationPath = Path.Combine(_root, "Razer Central");
+        string frameworkPath = Path.Combine(
+            applicationPath,
+            "Framework",
+            "Host");
+        Directory.CreateDirectory(frameworkPath);
+        File.WriteAllText(
+            Path.Combine(frameworkPath, "libcef.dll"),
+            string.Empty);
+        File.WriteAllText(
+            Path.Combine(frameworkPath, "CefSharp.BrowserSubprocess.exe"),
+            string.Empty);
+        string executablePath = Path.Combine(
+            applicationPath,
+            "Razer Central.exe");
+        File.WriteAllText(executablePath, string.Empty);
+        WindowsInstallationProvider provider = CreateProvider();
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([])).Installations);
+
+        Assert.Equal("CEF", installation.Platform);
+        Assert.Equal(applicationPath, installation.InstallPath);
+        Assert.Equal(executablePath, installation.ExecutablePath);
+        Assert.NotEqual("CefSharp", installation.Name);
+    }
+
+    [Fact]
+    public void PackageExecutableUsesManifestInsteadOfCreatedump()
+    {
+        Directory.CreateDirectory(_root);
+        string executablePath = Path.Combine(_root, "ActualApp.exe");
+        File.WriteAllText(executablePath, string.Empty);
+        File.WriteAllText(
+            Path.Combine(_root, "createdump.exe"),
+            string.Empty);
+        File.WriteAllText(
+            Path.Combine(_root, "AppxManifest.xml"),
+            """
+            <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+              <Applications>
+                <Application Id="App" Executable="ActualApp.exe" EntryPoint="Windows.FullTrustApplication" />
+              </Applications>
+            </Package>
+            """);
+
+        Assert.Equal(
+            executablePath,
+            InstallationExecutableSelector.FindPackageExecutable(
+                _root,
+                maximumDepth: 3));
+    }
+
+    [Fact]
     public async Task DiscoverUsesNormalizedQtAndNwJsPlatformIds()
     {
         string qtPath = Path.Combine(_root, "QtApp");
@@ -81,6 +159,37 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             result.Installations,
             installation => installation.InstallPath == nwPath
                 && installation.Platform == RuntimePlatformIds.Nwjs);
+    }
+
+    [Fact]
+    public async Task DiscoverClassifiesChromiumSourceOutputAsBrowser()
+    {
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(Path.Combine(_root, ".gn"), string.Empty);
+        string outputPath = Path.Combine(_root, "out", "Debug");
+        Directory.CreateDirectory(outputPath);
+        string executablePath = Path.Combine(outputPath, "chrome.exe");
+        File.WriteAllText(executablePath, string.Empty);
+        File.WriteAllText(
+            Path.Combine(outputPath, "chrome.dll"),
+            string.Empty);
+        File.WriteAllText(
+            Path.Combine(outputPath, "chrome_elf.dll"),
+            string.Empty);
+        WindowsInstallationProvider provider = CreateProvider();
+
+        ChromiumInstallation installation = Assert.Single(
+            (await provider.DiscoverAsync([])).Installations);
+
+        Assert.Equal("Chromium Source Build (Debug)", installation.Name);
+        Assert.Equal("Browser", installation.Kind);
+        Assert.Equal("Chromium", installation.Platform);
+        Assert.Equal("Source", installation.Channel);
+        Assert.Equal("Source", installation.Metadata.InstallType);
+        Assert.Equal(executablePath, installation.ExecutablePath);
+        Assert.Contains(
+            installation.Evidence,
+            evidence => evidence.Source == "chromium-source-build");
     }
 
     [Fact]

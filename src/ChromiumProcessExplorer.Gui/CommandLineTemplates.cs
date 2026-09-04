@@ -1,3 +1,6 @@
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using ChromiumProcessExplorer.Core.Discovery;
 
@@ -45,7 +48,7 @@ public sealed record CommandLineTemplateSettings
             IsFavorite = true,
             AddParts =
             [
-                "--remote-debugging-port=9222",
+                "--remote-debugging-port=0",
                 "--user-data-dir=%LOCALAPPDATA%\\ChromiumProcessExplorer\\RemoteDebugging\\{executable}",
             ],
         };
@@ -270,6 +273,32 @@ public static class CommandLineTemplateTransformer
             .ToArray();
     }
 
+    public static IReadOnlyList<string> Apply(
+        string? commandLine,
+        CommandLineTemplateSettings template,
+        string executablePath)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+        string randomFileName = Path.GetRandomFileName();
+        string executableName = Path.GetFileNameWithoutExtension(executablePath);
+        string targetSpecificFileName = CreateTargetSpecificFileName(
+            executablePath,
+            executableName);
+        return Apply(
+            commandLine,
+            template with
+            {
+                AddParts = template.AddParts
+                    .Select(part => ExpandVariables(
+                        part,
+                        executableName,
+                        randomFileName,
+                        targetSpecificFileName))
+                    .ToArray(),
+            });
+    }
+
     private static bool ShouldRemove(
         string argument,
         IReadOnlyList<CommandLineRemovalSettings> removals)
@@ -298,6 +327,51 @@ public static class CommandLineTemplateTransformer
         }
 
         return false;
+    }
+
+    private static string ExpandVariables(
+        string argument,
+        string executableName,
+        string randomFileName,
+        string targetSpecificFileName)
+    {
+        string expanded = argument
+            .Replace(
+                "{executable}",
+                executableName,
+                StringComparison.OrdinalIgnoreCase)
+            .Replace(
+                "{random-file}",
+                randomFileName,
+                StringComparison.OrdinalIgnoreCase)
+            .Replace(
+                "{target-specific-file}",
+                targetSpecificFileName,
+                StringComparison.OrdinalIgnoreCase);
+        return Regex.Replace(
+            expanded,
+            @"\{env:([^{}]+)\}",
+            match =>
+            {
+                string name = match.Groups[1].Value.Trim();
+                string? value = Environment.GetEnvironmentVariable(name);
+                return value ?? throw new InvalidOperationException(
+                    $"Environment variable \"{name}\" is not defined.");
+            },
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+            RegexTimeout);
+    }
+
+    private static string CreateTargetSpecificFileName(
+        string executablePath,
+        string executableName)
+    {
+        string normalizedPath = Path.GetFullPath(executablePath)
+            .ToUpperInvariant();
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalizedPath));
+        string suffix = Convert.ToHexString(hash.AsSpan(0, 4))
+            .ToLowerInvariant();
+        return $"{executableName.ToLowerInvariant()}-{suffix}";
     }
 
     private static bool MatchesLiteral(string argument, string removal)

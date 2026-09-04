@@ -175,6 +175,132 @@ public sealed class ChromiumProcessDiscovery
         };
     }
 
+    /// <summary>
+    /// Refreshes process discovery by reusing unchanged process generations and
+    /// inspecting only newly observed processes.
+    /// </summary>
+    public async ValueTask<ChromiumDiscoveryResult> DiscoverIncrementalAsync(
+        ChromiumDiscoveryResult previous,
+        HandleQueryWorkerOptions workerOptions,
+        bool includeWindowEvidence,
+        int? maximumProcessConcurrency = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(workerOptions);
+
+        DateTimeOffset capturedAt = DateTimeOffset.UtcNow;
+        IReadOnlyList<ProcessSnapshotEntry> processes =
+            await _processSnapshotter.CaptureIncrementalAsync(
+                previous.Processes,
+                maximumProcessConcurrency,
+                cancellationToken);
+        Dictionary<int, ProcessSnapshotEntry> previousById =
+            previous.Processes.ToDictionary(process => process.ProcessId);
+        Dictionary<int, ProcessSnapshotEntry> currentById =
+            processes.ToDictionary(process => process.ProcessId);
+        ProcessSnapshotEntry[] newProcesses = processes
+            .Where(process =>
+                !previousById.TryGetValue(
+                    process.ProcessId,
+                    out ProcessSnapshotEntry? old)
+                || old.CreationTime is null
+                || process.CreationTime is null
+                || old.CreationTime != process.CreationTime)
+            .ToArray();
+        bool processSetChanged = newProcesses.Length > 0
+            || previous.Processes.Any(process =>
+                !currentById.TryGetValue(
+                    process.ProcessId,
+                    out ProcessSnapshotEntry? current)
+                || process.CreationTime is null
+                || current.CreationTime is null
+                || process.CreationTime != current.CreationTime);
+        if (!processSetChanged)
+        {
+            return previous;
+        }
+
+        MojoPipeEnumerationResult pipeResult =
+            await _mojoPipeEnumerator.EnumerateAsync(cancellationToken);
+        MojoPipeInspectionResult newInspection = newProcesses.Length == 0
+            ? CreateUninspectedMojoResult(pipeResult, capturedAt)
+            : await InspectMojoPipesAsync(
+                pipeResult,
+                newProcesses,
+                workerOptions,
+                cancellationToken);
+        MojoPipeInspectionResult inspection = MergeMojoInspection(
+            previous.MojoPipeInspection,
+            newInspection,
+            pipeResult,
+            previousById,
+            currentById);
+
+        WindowSnapshotResult newWindows = includeWindowEvidence
+            && newProcesses.Length > 0
+            ? await _windowSnapshotProvider.CaptureAsync(
+                newProcesses,
+                cancellationToken)
+            : WindowSnapshotResult.Empty;
+        WindowSnapshotResult windows = MergeWindowSnapshot(
+            previous.WebView2Runtime.WindowSnapshot,
+            newWindows,
+            previousById,
+            currentById);
+
+        CdpDiscoveryResult newCdp = newProcesses.Length == 0
+            ? new CdpDiscoveryResult(capturedAt, [])
+            : await _cdpEndpointProvider.DiscoverAsync(
+                newProcesses,
+                workerOptions,
+                cancellationToken);
+        CdpDiscoveryResult cdp = MergeCdpDiscovery(
+            previous.Cdp,
+            newCdp,
+            previousById,
+            currentById);
+
+        CefRuntimeAnalysis cefRuntime = CefRuntimeAdapter.Analyze(processes);
+        ElectronRuntimeAnalysis electronRuntime =
+            ElectronRuntimeAdapter.Analyze(processes);
+        WebView2RuntimeAnalysis webView2Runtime = WebView2RuntimeAdapter.Analyze(
+            processes,
+            inspection,
+            windows);
+        AdditionalRuntimeAnalysis additionalRuntime =
+            AdditionalRuntimeAdapter.Analyze(
+                processes,
+                cefRuntime,
+                electronRuntime,
+                webView2Runtime);
+        ProcessGraph graph = ProcessGraphBuilder.Build(
+            processes,
+            inspection,
+            capturedAt,
+            cefRuntime,
+            webView2Runtime,
+            electronRuntime,
+            additionalRuntime);
+        return new ChromiumDiscoveryResult(
+            capturedAt,
+            processes,
+            graph,
+            graph.CreateProcessTree(),
+            inspection,
+            inspection.Issues
+                .Concat(webView2Runtime.Issues)
+                .Concat(additionalRuntime.Issues)
+                .ToArray())
+        {
+            CefRuntime = cefRuntime,
+            WebView2Runtime = webView2Runtime,
+            ElectronRuntime = electronRuntime,
+            AdditionalRuntime = additionalRuntime,
+            Cdp = cdp,
+        };
+    }
+
     /// <summary>Enumerates Mojo pipes without performing process discovery.</summary>
     public ValueTask<MojoPipeEnumerationResult> EnumerateMojoPipesAsync(
         CancellationToken cancellationToken = default)
@@ -502,6 +628,193 @@ public sealed class ChromiumProcessDiscovery
         {
             Issues = pipeResult.Issues.Concat(inspection.Issues).ToArray(),
         };
+    }
+
+    private static MojoPipeInspectionResult MergeMojoInspection(
+        MojoPipeInspectionResult previous,
+        MojoPipeInspectionResult current,
+        MojoPipeEnumerationResult pipeResult,
+        Dictionary<int, ProcessSnapshotEntry> previousById,
+        Dictionary<int, ProcessSnapshotEntry> currentById)
+    {
+        Dictionary<string, MojoPipeInfo> previousByName = previous.Pipes
+            .ToDictionary(pipe => pipe.Name, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, MojoPipeInfo> currentByName = current.Pipes
+            .ToDictionary(pipe => pipe.Name, StringComparer.OrdinalIgnoreCase);
+        MojoPipeInfo[] pipes = pipeResult.Pipes.Select(pipe =>
+        {
+            IEnumerable<NamedPipeConnection> retained =
+                previousByName.TryGetValue(
+                    pipe.Name,
+                    out MojoPipeInfo? oldPipe)
+                    ? oldPipe.Connections.Where(connection =>
+                        IsSurvivingProcess(
+                            connection.HandleOwnerProcessId,
+                            previousById,
+                            currentById)
+                        && IsSurvivingProcess(
+                            connection.ServerProcessId,
+                            previousById,
+                            currentById)
+                        && IsSurvivingProcess(
+                            connection.ClientProcessId,
+                            previousById,
+                            currentById))
+                    : [];
+            IEnumerable<NamedPipeConnection> discovered =
+                currentByName.TryGetValue(
+                    pipe.Name,
+                    out MojoPipeInfo? newPipe)
+                    ? newPipe.Connections
+                    : [];
+            return new MojoPipeInfo(
+                pipe.Name,
+                pipe.ProcessIdHint,
+                retained.Concat(discovered).Distinct().ToArray());
+        }).ToArray();
+        return current with
+        {
+            Pipes = pipes,
+            Statistics = current.Statistics with
+            {
+                CandidatePipeCount = pipes.Length,
+            },
+            TimedOutQueries = previous.TimedOutQueries
+                .Where(query => IsSurvivingProcess(
+                    query.OwnerProcessId,
+                    previousById,
+                    currentById))
+                .Concat(current.TimedOutQueries)
+                .Distinct()
+                .ToArray(),
+            Issues = previous.Issues
+                .Where(issue => issue.ProcessId is int processId
+                    && IsSurvivingProcess(
+                        processId,
+                        previousById,
+                        currentById))
+                .Concat(current.Issues)
+                .Distinct()
+                .ToArray(),
+        };
+    }
+
+    private static MojoPipeInspectionResult CreateUninspectedMojoResult(
+        MojoPipeEnumerationResult pipeResult,
+        DateTimeOffset capturedAt)
+    {
+        return new MojoPipeInspectionResult(
+            capturedAt,
+            pipeResult.Pipes
+                .Select(pipe => new MojoPipeInfo(
+                    pipe.Name,
+                    pipe.ProcessIdHint,
+                    []))
+                .ToArray(),
+            new NamedPipeInspectionStatistics(
+                pipeResult.Pipes.Count,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                TimeSpan.Zero),
+            [],
+            pipeResult.Issues);
+    }
+
+    private static WindowSnapshotResult MergeWindowSnapshot(
+        WindowSnapshotResult previous,
+        WindowSnapshotResult current,
+        Dictionary<int, ProcessSnapshotEntry> previousById,
+        Dictionary<int, ProcessSnapshotEntry> currentById)
+    {
+        HashSet<int> newProcessIds = currentById
+            .Where(pair =>
+                !previousById.TryGetValue(
+                    pair.Key,
+                    out ProcessSnapshotEntry? previousProcess)
+                || previousProcess.CreationTime is null
+                || pair.Value.CreationTime is null
+                || previousProcess.CreationTime != pair.Value.CreationTime)
+            .Select(pair => pair.Key)
+            .ToHashSet();
+        WindowSnapshotEntry[] windows = previous.Windows
+            .Where(window => IsSurvivingProcess(
+                window.OwnerProcessId,
+                previousById,
+                currentById))
+            .Concat(current.Windows.Where(window =>
+                newProcessIds.Contains(window.OwnerProcessId)))
+            .DistinctBy(window => window.WindowHandle)
+            .ToArray();
+        return new WindowSnapshotResult(
+            current.CapturedAt,
+            windows,
+            previous.Issues
+                .Where(issue => issue.ProcessId is int processId
+                    && IsSurvivingProcess(
+                        processId,
+                        previousById,
+                        currentById))
+                .Concat(current.Issues)
+                .Distinct()
+                .ToArray());
+    }
+
+    private static CdpDiscoveryResult MergeCdpDiscovery(
+        CdpDiscoveryResult previous,
+        CdpDiscoveryResult current,
+        Dictionary<int, ProcessSnapshotEntry> previousById,
+        Dictionary<int, ProcessSnapshotEntry> currentById)
+    {
+        CdpTransportInfo[] transports = previous.Transports
+            .Where(transport => IsSurvivingProcess(
+                transport.ProcessId,
+                previousById,
+                currentById))
+            .Concat(current.Transports)
+            .DistinctBy(transport => (
+                transport.ProcessId,
+                transport.Kind,
+                transport.ConfiguredValue))
+            .ToArray();
+        return new CdpDiscoveryResult(
+            current.CapturedAt,
+            transports)
+        {
+            Issues = previous.Issues
+                .Where(issue => issue.ProcessId is int processId
+                    && IsSurvivingProcess(
+                        processId,
+                        previousById,
+                        currentById))
+                .Concat(current.Issues)
+                .Distinct()
+                .ToArray(),
+        };
+    }
+
+    private static bool IsSurvivingProcess(
+        int? processId,
+        Dictionary<int, ProcessSnapshotEntry> previousById,
+        Dictionary<int, ProcessSnapshotEntry> currentById)
+    {
+        if (processId is null)
+        {
+            return true;
+        }
+
+        return previousById.TryGetValue(
+                processId.Value,
+                out ProcessSnapshotEntry? previous)
+            && currentById.TryGetValue(
+                processId.Value,
+                out ProcessSnapshotEntry? current)
+            && previous.CreationTime == current.CreationTime;
     }
 }
 

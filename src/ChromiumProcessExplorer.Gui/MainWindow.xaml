@@ -139,7 +139,7 @@
                                         <Style TargetType="Button">
                                             <Setter Property="IsEnabled" Value="True" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsProcessActivityBusy}" Value="True">
+                                                <DataTrigger Binding="{Binding IsRefreshingProcesses}" Value="True">
                                                     <Setter Property="IsEnabled" Value="False" />
                                                 </DataTrigger>
                                             </Style.Triggers>
@@ -166,7 +166,7 @@
                                           VerticalAlignment="Center"
                                           Content="Auto refresh"
                                           IsChecked="{Binding AutoRefreshProcesses}"
-                                          ToolTip="Poll Mojo pipe names and run a full refresh only when they change." />
+                                          ToolTip="Poll process identities and apply lightweight updates when processes start or exit." />
                                 <ProgressBar Width="90"
                                              Height="6"
                                              Margin="10,0,0,0"
@@ -262,8 +262,18 @@
                                 </Style>
                             </TreeView.ItemContainerStyle>
                             <TreeView.Resources>
+                                <Style x:Key="ProcessTreeSecondaryText"
+                                       TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="#FF5B6472" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}"
+                                                     Value="True">
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
                                 <HierarchicalDataTemplate DataType="{x:Type local:ProcessTreeItemViewModel}"
-                                                          ItemsSource="{Binding Children}">
+                                                          ItemsSource="{Binding TreeChildren}">
                                     <Grid Margin="1">
                                         <Grid.ContextMenu>
                                             <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
@@ -322,8 +332,8 @@
                                                            Text="{Binding StateLabel}" />
                                             </StackPanel>
                                             <TextBlock MaxWidth="430"
-                                                       Foreground="#FF5B6472"
                                                        FontSize="11"
+                                                       Style="{StaticResource ProcessTreeSecondaryText}"
                                                        Text="{Binding OriginSummary}"
                                                        TextTrimming="CharacterEllipsis"
                                                        ToolTip="{Binding OriginToolTip}"
@@ -354,6 +364,38 @@
                                                    Visibility="{Binding HasWarning, Converter={StaticResource BooleanToVisibility}}" />
                                     </Grid>
                                 </HierarchicalDataTemplate>
+                                <DataTemplate DataType="{x:Type local:ProcessFrameTreeItemViewModel}">
+                                    <Grid Margin="3,1,1,1"
+                                          ToolTip="{Binding Url}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Margin="0,0,6,0"
+                                                Padding="5,1"
+                                                Background="#FFE8EEF8"
+                                                CornerRadius="3">
+                                            <TextBlock FontSize="11"
+                                                       Foreground="#FF365A8C"
+                                                       Text="{Binding Kind}" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock FontWeight="SemiBold"
+                                                       Text="{Binding Title}" />
+                                            <TextBlock MaxWidth="430"
+                                                       FontSize="11"
+                                                       Style="{StaticResource ProcessTreeSecondaryText}"
+                                                       Text="{Binding Url}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="2"
+                                                   Margin="8,0,0,0"
+                                                   FontSize="11"
+                                                   Style="{StaticResource ProcessTreeSecondaryText}"
+                                                   Text="{Binding Lifecycle}" />
+                                    </Grid>
+                                </DataTemplate>
                             </TreeView.Resources>
                         </TreeView>
                     </Grid>
@@ -407,6 +449,7 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="44" />
                                             <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <Image Width="32"
                                                Height="32"
@@ -421,6 +464,13 @@
                                                 <Run Text="{Binding Role}" />
                                             </TextBlock>
                                         </StackPanel>
+                                        <Button Grid.Column="2"
+                                                Padding="12,4"
+                                                VerticalAlignment="Top"
+                                                Click="RefreshProcessDetails_Click"
+                                                Content="Refresh"
+                                                IsEnabled="{Binding DataContext.CanRefreshProcessDetails, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                ToolTip="Reload details and diagnostics for this process generation." />
                                     </Grid>
                                 </Border>
 
@@ -803,7 +853,7 @@
                                         <Style TargetType="Button">
                                             <Setter Property="IsEnabled" Value="True" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsProcessActivityBusy}" Value="True">
+                                                <DataTrigger Binding="{Binding IsRefreshingProcesses}" Value="True">
                                                     <Setter Property="IsEnabled" Value="False" />
                                                 </DataTrigger>
                                             </Style.Triggers>
@@ -917,15 +967,14 @@
                                     </DataGrid>
                                 </StackPanel>
                             </GroupBox>
-                            <GroupBox Header="Process internals" Style="{StaticResource SectionCard}">
+                            <GroupBox Header="Renderer frame information" Style="{StaticResource SectionCard}">
                                 <StackPanel>
                                     <StackPanel Margin="0,0,0,8"
                                                 Orientation="Horizontal">
-                                        <Button Padding="10,4"
-                                                Click="ExtractProcessInternals_Click"
-                                                Content="Extract silently"
-                                                IsEnabled="{Binding CanExtractProcessInternals}"
-                                                ToolTip="Create a hidden chrome:// or edge://process-internals target, extract its frame tree, then close the CDP session." />
+                                        <CheckBox VerticalAlignment="Center"
+                                                  Content="Auto extract frame info"
+                                                  IsChecked="{Binding AutoExtractFrameInfo}"
+                                                  ToolTip="Refresh hidden chrome:// or edge://process-internals frame data during process refreshes and display it beneath renderer processes." />
                                         <ProgressBar Width="70"
                                                      Height="6"
                                                      Margin="10,0,0,0"
@@ -947,17 +996,6 @@
                                                Foreground="#FF5B6472"
                                                Text="{Binding DevToolsActionStatus}"
                                                TextWrapping="Wrap" />
-                                    <DataGrid Height="240"
-                                              ItemsSource="{Binding ProcessInternalsFrames}">
-                                        <DataGrid.Columns>
-                                            <DataGridTextColumn Header="Page" Binding="{Binding Page}" Width="2*" />
-                                            <DataGridTextColumn Header="Depth" Binding="{Binding Depth}" Width="Auto" />
-                                            <DataGridTextColumn Header="Process" Binding="{Binding Process}" Width="*" />
-                                            <DataGridTextColumn Header="State" Binding="{Binding Lifecycle}" Width="Auto" />
-                                            <DataGridTextColumn Header="SiteInstance" Binding="{Binding SiteInstance}" Width="*" />
-                                            <DataGridTextColumn Header="URL" Binding="{Binding Url}" Width="3*" />
-                                        </DataGrid.Columns>
-                                    </DataGrid>
                                 </StackPanel>
                             </GroupBox>
                         </StackPanel>
@@ -1057,7 +1095,7 @@
                                           Style="{StaticResource SectionCard}">
                                     <StackPanel>
                                         <TextBlock Foreground="#FF5B6472"
-                                                   Text="Enter one complete argument per line, such as --remote-debugging-port=9222."
+                                                   Text="Enter one complete argument per line. Variables: {env:NAME}, {random-file}, {target-specific-file}, and {executable}."
                                                    TextWrapping="Wrap" />
                                         <TextBox x:Name="CommandLineAddPartsTextBox"
                                                  MinHeight="130"
