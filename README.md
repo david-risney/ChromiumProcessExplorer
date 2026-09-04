@@ -60,13 +60,15 @@ Check formatting without changing files:
 dotnet format ChromiumProcessExplorer.sln --no-restore --verify-no-changes
 ```
 
-The repository also includes a GUI build helper. Watch mode polls for upstream
-commits and local source changes, then rebuilds the GUI and its shared
-dependencies before restarting it. It does not rebuild the active MCP server
-or register itself to run at Windows logon. Starting watch mode launches the
-GUI through a UAC prompt if it is not already running. The watcher and build
-commands remain unelevated; only the GUI process runs as administrator.
-Unexpected watcher failures are saved to
+The repository also includes a GUI build helper. If required, it installs the
+.NET 9 SDK through `winget`; watch mode also installs Git for Windows when Git
+is unavailable. This automatic bootstrap requires Windows App Installer
+(`winget`). Watch mode polls for upstream commits and local source changes,
+then rebuilds the GUI and its shared dependencies before restarting it. It
+does not rebuild the active MCP server or register itself to run at Windows
+logon. Starting watch mode launches the GUI through a UAC prompt if it is not
+already running. The watcher and build commands remain unelevated; only the
+GUI process runs as administrator. Unexpected watcher failures are saved to
 `%LOCALAPPDATA%\ChromiumProcessExplorer\build-watch.log`.
 
 ```powershell

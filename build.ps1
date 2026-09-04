@@ -26,11 +26,77 @@ $guiProject = Join-Path $PSScriptRoot 'src\ChromiumProcessExplorer.Gui\ChromiumP
 $guiExe = Join-Path $PSScriptRoot 'src\ChromiumProcessExplorer.Gui\bin\Debug\net9.0-windows\ChromiumProcessExplorer.exe'
 $watchLog = Join-Path $env:LOCALAPPDATA 'ChromiumProcessExplorer\build-watch.log'
 
-function Ensure-DotnetSdk {
-    $sdks = & dotnet --list-sdks 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not ($sdks -match '^9\.')) {
-        throw '.NET 9 SDK is required. Install it from https://dotnet.microsoft.com/download/dotnet/9.0.'
+function Update-ProcessPath {
+    $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    $paths = @($machinePath, $userPath) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $env:Path = [string]::Join(';', $paths)
+}
+
+function Install-WingetPackage {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Id,
+
+        [Parameter(Mandatory)]
+        [string] $DisplayName
+    )
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "$DisplayName is required and winget is unavailable. Install App Installer from the Microsoft Store, then rerun this script."
     }
+
+    Write-Host "$DisplayName was not found. Installing it with winget..." -ForegroundColor Yellow
+    & winget install `
+        --id $Id `
+        --exact `
+        --source winget `
+        --accept-source-agreements `
+        --accept-package-agreements
+    if ($LASTEXITCODE -ne 0) {
+        throw "winget failed to install $DisplayName (exit $LASTEXITCODE)."
+    }
+
+    Update-ProcessPath
+}
+
+function Test-DotnetSdk {
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if (-not $dotnet) {
+        return $false
+    }
+
+    $sdks = & $dotnet.Source --list-sdks 2>$null
+    return $LASTEXITCODE -eq 0 -and $sdks -match '^9\.'
+}
+
+function Ensure-DotnetSdk {
+    if (Test-DotnetSdk) {
+        return
+    }
+
+    Install-WingetPackage `
+        -Id 'Microsoft.DotNet.SDK.9' `
+        -DisplayName '.NET 9 SDK'
+    if (-not (Test-DotnetSdk)) {
+        throw '.NET 9 SDK installation completed, but the SDK is still unavailable in this PowerShell session.'
+    }
+
+    Write-Host '.NET 9 SDK installed.' -ForegroundColor Green
+}
+
+function Ensure-Git {
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    Install-WingetPackage -Id 'Git.Git' -DisplayName 'Git for Windows'
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw 'Git installation completed, but Git is still unavailable in this PowerShell session.'
+    }
+
+    Write-Host 'Git for Windows installed.' -ForegroundColor Green
 }
 
 function Invoke-Restore {
@@ -126,8 +192,12 @@ function Get-LatestSourceChange {
 }
 
 try {
+    Ensure-DotnetSdk
+    if ($Task -eq 'watch') {
+        Ensure-Git
+    }
+
     if ($Task -ne 'clean') {
-        Ensure-DotnetSdk
         Invoke-Restore
     }
 
