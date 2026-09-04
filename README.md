@@ -237,7 +237,7 @@ configured installation search folders are probed without recursively scanning
 the full source tree. Ready fixed drives are also checked for developer
 enlistments shaped like `<drive>\*\src` and `<drive>\s\*\src`. Chromium and
 Edge origins are validated from Git configuration before
-`src\build\<configuration>\chrome.exe` outputs are added.
+`src\out\<configuration>\chrome.exe` outputs are added.
 
 Process context menus can launch the configured debugger for the selected PID,
 open Process Explorer at that PID, terminate its process tree, or configure

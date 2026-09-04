@@ -193,7 +193,7 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task DiscoverFindsChromiumAndEdgeDeveloperBuildFolders()
+    public async Task DiscoverFindsChromiumAndEdgeDeveloperOutputFolders()
     {
         string chromiumSource = CreateDeveloperEnlistment(
             "chromium",
@@ -218,14 +218,14 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             result.Installations,
             installation => installation.Platform == "Chromium");
         Assert.Equal(
-            Path.Combine(chromiumSource, "build", "debug_x64", "chrome.exe"),
+            Path.Combine(chromiumSource, "out", "debug_x64", "chrome.exe"),
             chromium.ExecutablePath);
         Assert.Equal("Chromium Source Build (debug_x64)", chromium.Name);
         ChromiumInstallation edge = Assert.Single(
             result.Installations,
             installation => installation.Platform == "Edge");
         Assert.Equal(
-            Path.Combine(edgeSource, "build", "release_x64", "chrome.exe"),
+            Path.Combine(edgeSource, "out", "release_x64", "chrome.exe"),
             edge.ExecutablePath);
         Assert.Equal("Microsoft Edge Source Build (release_x64)", edge.Name);
         Assert.All(
@@ -784,7 +784,7 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             + $"\turl = {origin}{Environment.NewLine}");
         string outputDirectory = Path.Combine(
             sourceRoot,
-            "build",
+            "out",
             configuration);
         Directory.CreateDirectory(outputDirectory);
         File.WriteAllText(

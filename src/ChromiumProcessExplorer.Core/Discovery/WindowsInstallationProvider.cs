@@ -1059,18 +1059,19 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                 continue;
             }
 
-            string buildRoot = Path.Combine(sourceRoot, "build");
-            if (!Directory.Exists(buildRoot))
+            string outputRoot = Path.Combine(sourceRoot, "out");
+            if (!Directory.Exists(outputRoot))
             {
                 continue;
             }
 
             try
             {
-                foreach (string outputDirectory in Directory.EnumerateDirectories(
-                    buildRoot,
-                    "*",
-                    SearchOption.TopDirectoryOnly))
+                foreach (string outputDirectory in
+                    Directory.EnumerateDirectories(
+                        outputRoot,
+                        "*",
+                        SearchOption.TopDirectoryOnly))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     string executablePath = Path.Combine(
@@ -1100,7 +1101,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
                         "High");
                     builder.AddEvidence(new InstallationEvidence(
                         "developer-enlistment-source-build",
-                        $"Found chrome.exe in a validated {platform} source build directory.",
+                        $"Found chrome.exe in a validated {platform} source output directory.",
                         executablePath));
                 }
             }
@@ -1110,7 +1111,7 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             {
                 issues.Add(new DiscoveryIssue(
                     "installation-developer-enlistment",
-                    $"{buildRoot}: {exception.Message}"));
+                    $"{outputRoot}: {exception.Message}"));
             }
         }
     }
@@ -1335,11 +1336,9 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
     private static bool IsChromiumCheckoutSearchRoot(string root)
     {
         return (File.Exists(Path.Combine(root, ".gn"))
-                && (Directory.Exists(Path.Combine(root, "out"))
-                    || Directory.Exists(Path.Combine(root, "build"))))
+                && Directory.Exists(Path.Combine(root, "out")))
             || (File.Exists(Path.Combine(root, "src", ".gn"))
-                && (Directory.Exists(Path.Combine(root, "src", "out"))
-                    || Directory.Exists(Path.Combine(root, "src", "build"))));
+                && Directory.Exists(Path.Combine(root, "src", "out")));
     }
 
     private static IEnumerable<string> GetDefaultSearchRoots()
