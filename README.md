@@ -234,7 +234,10 @@ executable when only helpers are present beside the Chromium runtime files.
 Chromium source checkouts are recognized through `.gn` plus
 `out\<configuration>\chrome.exe` layouts. Common checkout paths and explicitly
 configured installation search folders are probed without recursively scanning
-the full source tree.
+the full source tree. Ready fixed drives are also checked for developer
+enlistments shaped like `<drive>\*\src` and `<drive>\s\*\src`. Chromium and
+Edge origins are validated from Git configuration before
+`src\build\<configuration>\chrome.exe` outputs are added.
 
 Process context menus can launch the configured debugger for the selected PID,
 open Process Explorer at that PID, terminate its process tree, or configure
@@ -305,7 +308,7 @@ Role text is normalized to consistent display casing. When Chromium exposes a
 WindowsApps/SystemApps processes use this priority: embedded executable icon,
 Appx manifest logo, shell file icon, then the generic fallback.
 
-`installations` combines six evidence sources:
+`installations` combines seven evidence sources:
 
 - well-known Chromium browser and WebView2 runtime locations;
 - per-machine and per-user uninstall registrations from both registry views;
@@ -315,7 +318,8 @@ Appx manifest logo, shell file icon, then the generic fallback.
   `--app-id`;
 - bounded scans of Program Files and per-user application folders for markers
   such as `libcef.dll`, `WebView2Loader.dll`, `app.asar`, `nw.dll`, and Qt
-  WebEngine libraries; and
+  WebEngine libraries;
+- validated Chromium and Edge source-enlistment build outputs; and
 - executable folders represented by currently running Chromium processes.
 
 Records retain their evidence and report inaccessible or depth-limited

@@ -193,6 +193,54 @@ public sealed class WindowsInstallationProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task DiscoverFindsChromiumAndEdgeDeveloperBuildFolders()
+    {
+        string chromiumSource = CreateDeveloperEnlistment(
+            "chromium",
+            "https://chromium.googlesource.com/chromium/src.git",
+            "debug_x64");
+        string edgeSource = CreateDeveloperEnlistment(
+            Path.Combine("s", "edge"),
+            "https://microsoft.visualstudio.com/DefaultCollection/Edge/_git/Edge",
+            "release_x64");
+        WindowsInstallationDiscoveryOptions options = new(
+            [],
+            includeKnownLocations: false)
+        {
+            IncludeDeveloperEnlistments = true,
+            DeveloperEnlistmentSearchRoots = [_root],
+        };
+        WindowsInstallationProvider provider = new(options);
+
+        InstallationDiscoveryResult result = await provider.DiscoverAsync([]);
+
+        ChromiumInstallation chromium = Assert.Single(
+            result.Installations,
+            installation => installation.Platform == "Chromium");
+        Assert.Equal(
+            Path.Combine(chromiumSource, "build", "debug_x64", "chrome.exe"),
+            chromium.ExecutablePath);
+        Assert.Equal("Chromium Source Build (debug_x64)", chromium.Name);
+        ChromiumInstallation edge = Assert.Single(
+            result.Installations,
+            installation => installation.Platform == "Edge");
+        Assert.Equal(
+            Path.Combine(edgeSource, "build", "release_x64", "chrome.exe"),
+            edge.ExecutablePath);
+        Assert.Equal("Microsoft Edge Source Build (release_x64)", edge.Name);
+        Assert.All(
+            [chromium, edge],
+            installation =>
+            {
+                Assert.Equal("Source", installation.Channel);
+                Assert.Contains(
+                    installation.Evidence,
+                    evidence => evidence.Source
+                        == "developer-enlistment-source-build");
+            });
+    }
+
+    [Fact]
     public async Task DiscoverAddsRunningProcessInstallationOutsideSearchRoots()
     {
         Directory.CreateDirectory(_root);
@@ -720,6 +768,32 @@ public sealed class WindowsInstallationProviderTests : IDisposable
             options,
             new StubInstalledProgramProvider(records),
             new StubPackageProvider(packages));
+    }
+
+    private string CreateDeveloperEnlistment(
+        string relativeRoot,
+        string origin,
+        string configuration)
+    {
+        string sourceRoot = Path.Combine(_root, relativeRoot, "src");
+        string gitDirectory = Path.Combine(sourceRoot, ".git");
+        Directory.CreateDirectory(gitDirectory);
+        File.WriteAllText(
+            Path.Combine(gitDirectory, "config"),
+            $"[remote \"origin\"]{Environment.NewLine}"
+            + $"\turl = {origin}{Environment.NewLine}");
+        string outputDirectory = Path.Combine(
+            sourceRoot,
+            "build",
+            configuration);
+        Directory.CreateDirectory(outputDirectory);
+        File.WriteAllText(
+            Path.Combine(outputDirectory, "chrome.exe"),
+            string.Empty);
+        File.WriteAllText(
+            Path.Combine(outputDirectory, "chrome.dll"),
+            string.Empty);
+        return sourceRoot;
     }
 
     private static void WritePortableExecutable(string path, ushort machine)

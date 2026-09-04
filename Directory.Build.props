@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.2.7</VersionPrefix>
+    <VersionPrefix>0.2.8</VersionPrefix>
     <RepositoryUrl>https://github.com/david-risney/ChromiumProcessExplorer</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>

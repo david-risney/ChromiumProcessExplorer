@@ -9,6 +9,11 @@ namespace ChromiumProcessExplorer.Core.Discovery;
 /// </summary>
 public sealed class WindowsInstallationProvider : IInstallationProvider
 {
+    private const string ChromiumSourceOriginPrefix =
+        "https://chromium.googlesource.com/chromium/";
+    private const string EdgeSourceOriginPrefix =
+        "https://microsoft.visualstudio.com/DefaultCollection/Edge";
+
     private static readonly HashSet<string> MarkerFileNames =
         new(StringComparer.OrdinalIgnoreCase)
         {
@@ -198,6 +203,14 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
             installations,
             issues,
             cancellationToken);
+        if (_options.IncludeDeveloperEnlistments)
+        {
+            DiscoverDeveloperEnlistmentBuilds(
+                installations,
+                issues,
+                cancellationToken);
+        }
+
         List<DiscoveryIssue>[] filesystemIssues = searchRoots
             .Select(_ => new List<DiscoveryIssue>())
             .ToArray();
@@ -1016,6 +1029,280 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
         }
     }
 
+    private void DiscoverDeveloperEnlistmentBuilds(
+        Dictionary<string, InstallationBuilder> installations,
+        List<DiscoveryIssue> issues,
+        CancellationToken cancellationToken)
+    {
+        foreach (string sourceRoot in GetDeveloperEnlistmentSourceRoots(
+            issues,
+            cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? platform;
+            try
+            {
+                platform = GetDeveloperEnlistmentPlatform(sourceRoot);
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException)
+            {
+                issues.Add(new DiscoveryIssue(
+                    "installation-developer-enlistment",
+                    $"{sourceRoot}: {exception.Message}"));
+                continue;
+            }
+
+            if (platform is null)
+            {
+                continue;
+            }
+
+            string buildRoot = Path.Combine(sourceRoot, "build");
+            if (!Directory.Exists(buildRoot))
+            {
+                continue;
+            }
+
+            try
+            {
+                foreach (string outputDirectory in Directory.EnumerateDirectories(
+                    buildRoot,
+                    "*",
+                    SearchOption.TopDirectoryOnly))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    string executablePath = Path.Combine(
+                        outputDirectory,
+                        "chrome.exe");
+                    if (!IsDeveloperSourceBuildExecutable(executablePath))
+                    {
+                        continue;
+                    }
+
+                    string name = GetDeveloperSourceBuildName(
+                        platform,
+                        outputDirectory);
+                    InstallationBuilder builder = GetOrCreate(
+                        installations,
+                        outputDirectory,
+                        name,
+                        "Browser",
+                        platform);
+                    builder.RefineIdentity(name, "Browser", platform);
+                    builder.SetExecutable(executablePath);
+                    builder.SetChannel("Source");
+                    builder.SetDiscoveryMetadata(
+                        "Source",
+                        $"{platform} developer enlistment",
+                        false,
+                        "High");
+                    builder.AddEvidence(new InstallationEvidence(
+                        "developer-enlistment-source-build",
+                        $"Found chrome.exe in a validated {platform} source build directory.",
+                        executablePath));
+                }
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException)
+            {
+                issues.Add(new DiscoveryIssue(
+                    "installation-developer-enlistment",
+                    $"{buildRoot}: {exception.Message}"));
+            }
+        }
+    }
+
+    private IEnumerable<string> GetDeveloperEnlistmentSourceRoots(
+        List<DiscoveryIssue> issues,
+        CancellationToken cancellationToken)
+    {
+        IEnumerable<string> searchRoots =
+            _options.DeveloperEnlistmentSearchRoots
+            ?? DriveInfo.GetDrives()
+                .Where(drive =>
+                    drive.DriveType == DriveType.Fixed
+                    && drive.IsReady)
+                .Select(drive => drive.RootDirectory.FullName);
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string searchRootValue in searchRoots)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string[] candidates;
+            try
+            {
+                string searchRoot = Path.GetFullPath(searchRootValue);
+                candidates = EnumerateSourceDirectories(searchRoot).ToArray();
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException
+                    or IOException
+                    or NotSupportedException
+                    or UnauthorizedAccessException)
+            {
+                issues.Add(new DiscoveryIssue(
+                    "installation-developer-enlistment",
+                    $"{searchRootValue}: {exception.Message}"));
+                continue;
+            }
+
+            foreach (string candidate in candidates)
+            {
+                if (seen.Add(candidate))
+                {
+                    yield return candidate;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateSourceDirectories(
+        string searchRoot)
+    {
+        foreach (string enlistmentRoot in Directory.EnumerateDirectories(
+            searchRoot,
+            "*",
+            SearchOption.TopDirectoryOnly))
+        {
+            string sourceRoot = Path.Combine(enlistmentRoot, "src");
+            if (Directory.Exists(sourceRoot))
+            {
+                yield return sourceRoot;
+            }
+        }
+
+        string shortEnlistmentRoot = Path.Combine(searchRoot, "s");
+        if (!Directory.Exists(shortEnlistmentRoot))
+        {
+            yield break;
+        }
+
+        foreach (string enlistmentRoot in Directory.EnumerateDirectories(
+            shortEnlistmentRoot,
+            "*",
+            SearchOption.TopDirectoryOnly))
+        {
+            string sourceRoot = Path.Combine(enlistmentRoot, "src");
+            if (Directory.Exists(sourceRoot))
+            {
+                yield return sourceRoot;
+            }
+        }
+    }
+
+    private static string? GetDeveloperEnlistmentPlatform(string sourceRoot)
+    {
+        string? origin = ReadGitOrigin(sourceRoot);
+        if (origin?.StartsWith(
+            ChromiumSourceOriginPrefix,
+            StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return "Chromium";
+        }
+
+        return origin?.StartsWith(
+            EdgeSourceOriginPrefix,
+            StringComparison.OrdinalIgnoreCase) == true
+            ? "Edge"
+            : null;
+    }
+
+    private static string? ReadGitOrigin(string sourceRoot)
+    {
+        string gitPath = Path.Combine(sourceRoot, ".git");
+        string configPath = Directory.Exists(gitPath)
+            ? Path.Combine(gitPath, "config")
+            : GetGitFileConfigPath(gitPath);
+        if (!File.Exists(configPath))
+        {
+            return null;
+        }
+
+        bool isOrigin = false;
+        foreach (string line in File.ReadLines(configPath))
+        {
+            string value = line.Trim();
+            if (value.StartsWith('['))
+            {
+                isOrigin = value.Equals(
+                    "[remote \"origin\"]",
+                    StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (!isOrigin)
+            {
+                continue;
+            }
+
+            Match match = Regex.Match(
+                value,
+                @"^url\s*=\s*(.+)$",
+                RegexOptions.IgnoreCase,
+                TimeSpan.FromMilliseconds(100));
+            if (match.Success)
+            {
+                return match.Groups[1].Value.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    private static string GetGitFileConfigPath(string gitPath)
+    {
+        if (!File.Exists(gitPath))
+        {
+            return string.Empty;
+        }
+
+        string pointer = File.ReadLines(gitPath).FirstOrDefault() ?? string.Empty;
+        const string prefix = "gitdir:";
+        if (!pointer.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        string gitDirectory = pointer[prefix.Length..].Trim();
+        if (!Path.IsPathRooted(gitDirectory))
+        {
+            gitDirectory = Path.GetFullPath(
+                Path.Combine(Path.GetDirectoryName(gitPath)!, gitDirectory));
+        }
+
+        string commonDirectoryPath = Path.Combine(gitDirectory, "commondir");
+        if (File.Exists(commonDirectoryPath))
+        {
+            string commonDirectory = File.ReadAllText(commonDirectoryPath).Trim();
+            if (!Path.IsPathRooted(commonDirectory))
+            {
+                commonDirectory = Path.GetFullPath(
+                    Path.Combine(gitDirectory, commonDirectory));
+            }
+
+            return Path.Combine(commonDirectory, "config");
+        }
+
+        return Path.Combine(gitDirectory, "config");
+    }
+
+    private static bool IsDeveloperSourceBuildExecutable(string executablePath)
+    {
+        return File.Exists(executablePath);
+    }
+
+    private static string GetDeveloperSourceBuildName(
+        string platform,
+        string outputDirectory)
+    {
+        string configuration = new DirectoryInfo(outputDirectory).Name;
+        return platform == "Edge"
+            ? $"Microsoft Edge Source Build ({configuration})"
+            : $"Chromium Source Build ({configuration})";
+    }
+
     private static IEnumerable<string> GetChromiumOutputDirectories(
         string root)
     {
@@ -1048,9 +1335,11 @@ public sealed class WindowsInstallationProvider : IInstallationProvider
     private static bool IsChromiumCheckoutSearchRoot(string root)
     {
         return (File.Exists(Path.Combine(root, ".gn"))
-                && Directory.Exists(Path.Combine(root, "out")))
+                && (Directory.Exists(Path.Combine(root, "out"))
+                    || Directory.Exists(Path.Combine(root, "build"))))
             || (File.Exists(Path.Combine(root, "src", ".gn"))
-                && Directory.Exists(Path.Combine(root, "src", "out")));
+                && (Directory.Exists(Path.Combine(root, "src", "out"))
+                    || Directory.Exists(Path.Combine(root, "src", "build"))));
     }
 
     private static IEnumerable<string> GetDefaultSearchRoots()

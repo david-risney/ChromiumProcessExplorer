@@ -92,6 +92,7 @@ public sealed record WindowsInstallationDiscoveryOptions
         IncludeRegistry = false;
         IncludePackages = false;
         IncludeBrowserManagedApps = false;
+        IncludeDeveloperEnlistments = false;
         MaximumDepth = maximumDepth;
     }
 
@@ -122,6 +123,18 @@ public sealed record WindowsInstallationDiscoveryOptions
 
     /// <summary>Gets whether browser profiles, shortcuts, and app registrations are included.</summary>
     public bool IncludeBrowserManagedApps { get; init; } = true;
+
+    /// <summary>
+    /// Gets whether fixed-drive Edge and Chromium developer enlistments are
+    /// probed for source build outputs.
+    /// </summary>
+    public bool IncludeDeveloperEnlistments { get; init; } = true;
+
+    /// <summary>
+    /// Gets optional roots beneath which developer enlistment layouts are
+    /// probed. Null uses every ready fixed-drive root.
+    /// </summary>
+    public IReadOnlyList<string>? DeveloperEnlistmentSearchRoots { get; init; }
 
     /// <summary>Gets the maximum recursive depth beneath each search root.</summary>
     public int MaximumDepth { get; init; } = 12;
